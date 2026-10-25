@@ -61,6 +61,16 @@ CHANGES = re.compile(r"\bwhat(?:'s| has| have)? changed\b|\bchanges\b|\bcancell?
 # questions the timetable must not, or cannot, answer: said so, never guessed
 PRIVATE = re.compile(r"\bwhy\b.*\b(absent|away|on leave|off|not (coming|here|in)|cancell?ed|missing)\b", re.IGNORECASE)
 NOT_IN_DATA = re.compile(r"\b(holidays?|vacations?|exams?|examinations?|mid-?sems?|end-?sems?)\b", re.IGNORECASE)
+# Roles as answers say them ("The HOD (Dr. Rao) is free on ..."); a role not listed is said from its name
+# ("guest_faculty" -> "the guest faculty"), so a role added to core.schemas.Role needs nothing here.
+ROLE_NAMES = {"hod": "the HOD", "coordinator": "the timetable coordinator", "lab_incharge": "the lab in-charge",
+              "student": "the class representatives"}
+
+
+def role_name(role: str) -> str:
+    return ROLE_NAMES.get(role, f"the {role.replace('_', ' ')}")
+
+
 PRIVATE_NOTE = "I can't say why someone is away: the reasons are private. I can tell you which classes are not held."
 NOT_IN_DATA_NOTE = "I don't know that: holidays and exam dates are not in the timetable."
 # calendar dates: "28 October", "28th Oct", "Oct 28", "28/10", "28-10-2026" (day first, as written in India)
@@ -394,7 +404,9 @@ class Answerer:
             return f"{g.name} has {g.size} students; courses: {_listed(courses)}."
         if a.get("teacher"):
             f = i.faculty_by_id[a["teacher"]]
-            who = "You teach" if f.id == self.sender else f"{f.name} teaches"
+            role = a.get("as_role", {}).get(f.id)
+            who = ("You teach" if f.id == self.sender else
+                   _cap(f"{role_name(role)} is {f.name}, who teaches") if role else f"{f.name} teaches")
             return (f"{who} {_listed([i.course_title(c) for c in d.courses_of(f.id)])}: "
                     f"{d.weekly_hours(f.id)} hours a week.")
         if a.get("course"):
@@ -434,7 +446,7 @@ class Answerer:
         found = week.changes(a.get("teacher"), a.get("section"))
         whose = "" if not (a.get("teacher") or a.get("section")) else " for " + self._who(
             {"teachers": [a["teacher"]] if a.get("teacher") else [],
-             "sections": [a["section"]] if a.get("section") else []})[0]
+             "sections": [a["section"]] if a.get("section") else [], "as_role": a.get("as_role", {})})[0]
         if not found:
             return f"No changes{whose} in week {call.week}: the timetable is as planned."
         said = []
@@ -500,7 +512,7 @@ class Answerer:
             found = [c for c in found if c.placement.day in a["days"]]
         who, _ = self._who({"teachers": [a["teacher"]] if a.get("teacher") else [],
                             "sections": [a["section"]] if a.get("section") else [],
-                            "rooms": [a["room"]] if a.get("room") else []})
+                            "rooms": [a["room"]] if a.get("room") else [], "as_role": a.get("as_role", {})})
         course = self.instance.course_title(a["course"]) if a.get("course") else ""
         when = f"week {call.week}"
         if a.get("count"):  # "how many hours do I teach this week?"
@@ -554,15 +566,19 @@ class Answerer:
             rest = {k: [] if k in every else a.get(k, []) for k in ("teachers", "sections", "rooms")}
             others, _ = self._who(rest) if any(rest.values()) else ("", False)
             return _listed([f"all {w}" for w in every] + ([others] if others else [])), True
-        names = []
+        names, as_role, by_role = [], a.get("as_role", {}), {}  # a role named: "the HOD (Dr. Rao)"
         for t in a.get("teachers", []):
-            names.append("you" if t == self.sender else self.instance.faculty_by_id[t].name)
+            name = "you" if t == self.sender else self.instance.faculty_by_id[t].name
+            (by_role.setdefault(as_role[t], []) if t in as_role else names).append(name)
         for g in a.get("sections", []):
-            names.append("your section" if self.sender == f"ST-{g}" else self.instance.group_by_id[g].name)
+            name = "your section" if self.sender == f"ST-{g}" else self.instance.group_by_id[g].name
+            (by_role.setdefault(as_role[g], []) if g in as_role else names).append(name)
         names += [self.instance.room_by_id[r].name for r in a.get("rooms", [])]
-        if not names:
+        roles = [f"{role_name(r)} ({_listed(people)})" for r, people in by_role.items()]
+        if not names and not roles:
             return "anyone", False
-        return _listed(names), len(names) > 1 or names == ["you"]
+        count = len(names) + sum(len(p) for p in by_role.values())
+        return _listed(roles + names), count > 1 or names == ["you"]
 
 
 def dates_in(text: str, today: date) -> list[date]:

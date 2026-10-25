@@ -199,3 +199,47 @@ def test_every_teacher_is_no_filter_in_classes_and_changes(world):
     assert (call.tool, call.args) == ("classes_of", {"days": ["Fri"]})
     call = agent(world, Choice(tool="changes", sections=["all"], week=WEEK)).read("what changed for every section?")
     assert (call.tool, call.args) == ("changes", {})
+
+
+# -- roles: the model writes the role, the code finds who holds it now ------------------------------------------
+
+
+def hod(world):
+    return next(f for f in world.instance.faculty if f.role.value == "hod")
+
+
+def test_the_hod_is_whoever_holds_the_role(world):
+    call = agent(world, Choice(tool="free_hours", roles=["hod"], days=["Tue"], week=WEEK)).read("is the HOD free on tuesday?")
+    assert call.args == {"teachers": [hod(world).id], "days": ["Tue"], "as_role": {hod(world).id: "hod"}}
+    # the HOD changes: the same reading now means the new one, with no retraining
+    new = next(f for f in world.instance.faculty if f.role.value != "hod")
+    a = ToolAgent(world.instance, FakeModel(Choice(tool="free_hours", roles=["hod"], week=WEEK)), person(world, "Dr. Menon"),
+                  WEEK, today=date(2026, 10, 21), roles_of={new.id: "hod"})
+    assert a.read("when is the HOD free?").args["teachers"] == [new.id]
+
+
+def test_a_role_with_no_timetable_or_nobody_is_said_so(world):
+    office = agent(world, Choice(tool="free_hours", roles=["coordinator"], week=WEEK)).read("when is the timetable office free?")
+    assert not office.confident and "no classes in the timetable" in office.note
+    nobody = agent(world, Choice(tool="free_hours", roles=["dean"], week=WEEK)).read("when is the dean free?")
+    assert not nobody.confident and nobody.note == "There is no dean in the department data."
+
+
+def test_roles_mix_with_names_and_class_reps_are_their_sections(world):
+    call = agent(world, Choice(tool="free_hours", teachers=["me"], roles=["hod", "student"], week=WEEK)).read(
+        "when are the HOD, the CRs and I free?")
+    assert call.args["teachers"] == [person(world, "Dr. Menon"), hod(world).id]
+    assert call.args["sections"] == [g.id for g in world.instance.groups]
+
+
+def test_one_holder_needed_where_the_tool_takes_one(world):
+    call = agent(world, Choice(tool="classes_of", roles=["student"], week=WEEK)).read("what do the class reps have today?")
+    assert not call.confident and "Which one do you mean?" in call.note
+
+
+def test_the_prompt_lists_roles_but_not_who_holds_them(world):
+    a = agent(world, Choice(tool="none", week=WEEK))
+    a.read("when is the HOD free?")
+    line = next(x for x in a.client.prompts[0].splitlines() if x.startswith("Roles:"))
+    assert "hod (head of department" in line and "faculty (" not in line.replace("guest_faculty (", "")
+    assert hod(world).name not in line

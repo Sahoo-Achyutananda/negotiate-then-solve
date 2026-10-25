@@ -678,7 +678,8 @@ class World:
         if self.lookup_reader == "model" and self.model_link is not None and self.model_link.usable():
             try:
                 agent = ToolAgent(self.instance, _task(self.model_link.client, "lookup"), sender, week,
-                                  semester_start=start)
+                                  semester_start=start,  # roles as the app has them now ("the HOD")
+                                  roles_of={i.person: i.role.value for i in self.directory.by_email.values()})
                 call = agent.read(text)
                 if call is None or call.confident or call.note != COULD_NOT:
                     return call, "model"

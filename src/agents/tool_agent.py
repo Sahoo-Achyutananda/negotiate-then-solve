@@ -14,18 +14,30 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from collections.abc import Mapping
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
 from core.instance import Faculty, Group, Instance, Room
+from core.schemas import Role
 from language.corpus import hour
 from language.local import LocalClient
 
 from .lookup import TITLES, Directory
-from .questions import NOT_IN_DATA_NOTE, PRIVATE_NOTE, ToolCall, from_now, week_and_day
+from .questions import NOT_IN_DATA_NOTE, PRIVATE_NOTE, ToolCall, from_now, role_name, week_and_day
 
 MAX_TRIES = 3
+
+# Roles a question may name instead of a person: every role of core.schemas.Role but "faculty" (teachers in
+# general are teachers ["all"]). The model writes the role; who holds it is looked up when the question is
+# asked, so a new HOD needs no retraining. The words people use for each go in the prompt; a role added to
+# Role is offered with its own name until it gets words here.
+ROLES = tuple(r.value for r in Role if r.value != "faculty")
+RoleName = Literal[ROLES]  # type: ignore[valid-type]
+ROLE_WORDS = {"hod": "head of department, HoD, the head", "coordinator": "timetable coordinator, timetable office",
+              "guest_faculty": "guest or visiting faculty", "lab_incharge": "lab in-charge, lab assistant",
+              "exam_cell": "exam cell, examination office", "student": "class representatives, CRs"}
 COULD_NOT = "I couldn't work out that question. Could you ask it another way?"  # after MAX_TRIES failed checks
 
 SYSTEM = """You turn a question about a university department's weekly timetable into one lookup.
@@ -58,6 +70,9 @@ Tools (the fields to fill; leave the others empty):
                 rules ("is it allowed ...?", "how many ... can ...?"), or anything else.
 Rules:
 - Use names exactly as they are listed. "me" stands for the person asking ("I", "my", "we").
+- A role ("the HOD", "the timetable office", "the class reps") goes in roles, never the name of whoever
+  holds it: "when is the HOD free next week?": free_hours, roles ["hod"]. Teachers or faculty in general
+  are not a role: teachers ["all"].
 - "all", "each" or "every" teacher (faculty), section or room: write ["all"] in that list, never one or a
   few of them. "when are all faculty free together?": free_hours, teachers ["all"]; "what courses does each
   section take?": describe, sections ["all"]; "which teachers teach on Friday?": classes_of, teachers ["all"].
@@ -86,6 +101,7 @@ class Choice(BaseModel):
     teachers: list[str] = Field(default_factory=list, description='as listed, "me", or ["all"]')
     sections: list[str] = Field(default_factory=list, description='as listed, "me", or ["all"]')
     rooms: list[str] = Field(default_factory=list, description='as listed, or ["all"]')
+    roles: list[RoleName] = Field(default_factory=list, description="roles named instead of people")
     course: str | None = None
     days: list[str] = Field(default_factory=list, description="Mon, Tue, Wed, Thu, Fri")
     dates: list[str] = Field(default_factory=list, description="calendar dates named, YYYY-MM-DD")
@@ -113,6 +129,16 @@ class GrammarChoice(Choice):
     week: int | None = None
 
 
+def _role_words(role: str) -> str:
+    return ROLE_WORDS.get(role, role.replace("_", " "))
+
+
+def _said(role: str) -> str:
+    """The role at the start of a sentence: "The HOD"."""
+    name = role_name(role)
+    return name[0].upper() + name[1:]
+
+
 def _all(names: list[str]) -> bool:
     """The model wrote "all" in a list of names: every teacher, section or room."""
     return any(n.strip().lower() == "all" for n in names)
@@ -133,8 +159,16 @@ class ToolAgent:
     when the message is not a timetable question."""
 
     def __init__(self, instance: Instance, client: Client, sender: str, current_week: int,
-                 today: date | None = None, now: datetime | None = None, semester_start: date | None = None) -> None:
+                 today: date | None = None, now: datetime | None = None, semester_start: date | None = None,
+                 roles_of: Mapping[str, str] | None = None) -> None:
+        """``roles_of``: who holds which role now (person ID -> role); by default the sign-in directory the app
+        builds from the department (teachers' roles, class representatives, the office accounts)."""
         self.instance = instance
+        if roles_of is None:
+            from pipeline.ingest import Directory as People
+
+            roles_of = {i.person: i.role.value for i in People.from_instance(instance).by_email.values()}
+        self.roles_of = dict(roles_of)
         self.client = client
         self.sender = sender
         self.current_week = current_week
@@ -180,6 +214,7 @@ class ToolAgent:
                 f"Days: {', '.join(cal.days)}.\nHours (slots): {slots}.\n"
                 f"Teachers: {', '.join(f.name for f in i.faculty)}.\n"
                 f"Sections: {', '.join(g.name for g in i.groups)}.\n"
+                f"Roles: {'; '.join(f'{r} ({_role_words(r)})' for r in ROLES)}.\n"
                 f"Rooms: {rooms}.\n"
                 f"Courses: {', '.join(i.course_titles.values())}.\n\n"
                 f"Question:\n<question>{text}</question>")
@@ -229,6 +264,20 @@ class ToolAgent:
         if bad := [e for e in c.equipment if e not in known]:
             raise Problem(f"equipment {bad}: rooms have {', '.join(sorted(known))}")
         teachers, sections = self._people(c)
+        as_role: dict[str, str] = {}  # an ID the question named by its role: "the HOD" -> F-101
+        for role in dict.fromkeys(c.roles):
+            holders = sorted(p for p, r in self.roles_of.items() if r == role)
+            staff = [p for p in holders if p in self.instance.faculty_by_id]
+            reps = [p[3:] for p in holders if p.startswith("ST-") and p[3:] in self.instance.group_by_id]
+            if not holders:
+                return ToolCall("unclear", week=c.week, confident=False,
+                                note=f"There is no {role_name(role).removeprefix('the ')} in the department data.")
+            if not staff and not reps:  # the office accounts: no classes, so no timetable to look in
+                return ToolCall("unclear", week=c.week, confident=False,
+                                note=f"{_said(role)} has no classes in the timetable, so I can't answer that from it.")
+            teachers += [p for p in staff if p not in teachers]
+            sections += [g for g in reps if g not in sections]
+            as_role |= dict.fromkeys(staff + reps, role)
         rooms = ([r.id for r in self.instance.rooms] if _all(c.rooms) else [self._one(r, Room) for r in c.rooms])
         everyone = [k for k, v in (("teachers", c.teachers), ("sections", c.sections), ("rooms", c.rooms)) if _all(v)]
         course = self._one(c.course, str) if c.course else None
@@ -256,6 +305,8 @@ class ToolAgent:
             args = ({"what": everyone[0], "kind": c.kind if everyone[0] == "rooms" else None} if everyone else
                     self._describe(c, teachers, sections, rooms, course))
         elif c.tool == "changes":
+            if note := self._one_holder(teachers, sections, as_role, c.week):
+                return note
             # every teacher or section: the whole week's changes, no filter
             teachers, sections = ([] if "teachers" in everyone else teachers), ([] if "sections" in everyone else sections)
             if len(teachers) > 1 or len(sections) > 1:
@@ -266,6 +317,8 @@ class ToolAgent:
             teachers = [] if "teachers" in everyone else teachers
             sections = [] if "sections" in everyone else sections
             rooms = [] if "rooms" in everyone else rooms
+            if note := self._one_holder(teachers, sections, as_role, c.week):
+                return note
             if not (teachers or sections or rooms or course or everyone):
                 raise Problem("classes_of needs a teacher, a section, a room or a course")
             if len(teachers) > 1 or len(sections) > 1 or len(rooms) > 1:
@@ -276,8 +329,22 @@ class ToolAgent:
                 if not (teachers or sections):
                     raise Problem("next needs a teacher or a section")
                 week, after = from_now(self.instance, self.current_week, self.now or datetime.now())
-                return ToolCall("classes_of", {k: v for k, v in args.items() if v} | {"after": list(after)}, week)
-        return ToolCall(c.tool, {k: v for k, v in args.items() if v}, c.week)
+                return ToolCall("classes_of", {k: v for k, v in args.items() if v} | {"after": list(after)}
+                                | ({"as_role": as_role} if as_role else {}), week)
+        if c.tool == "describe" and not set(args) & {"teacher", "section"}:
+            as_role = {}  # a list ("each section"): nobody to say by their role
+        return ToolCall(c.tool, {k: v for k, v in args.items() if v} | ({"as_role": as_role} if as_role else {}), c.week)
+
+    def _one_holder(self, teachers: list[str], sections: list[str], as_role: dict[str, str], week: int) -> ToolCall | None:
+        """A tool that takes one teacher (or section), asked about a role several people hold: which one?"""
+        for role in dict.fromkeys(as_role.values()):
+            held = [x for x in [*teachers, *sections] if as_role.get(x) == role]
+            if len(held) > 1:
+                names = [self.instance.faculty_by_id[x].name if x in self.instance.faculty_by_id
+                         else self.instance.group_by_id[x].name for x in held]
+                return ToolCall("unclear", week=week, confident=False,
+                                note=f"{_said(role)} are {' and '.join(names)}. Which one do you mean?")
+        return None
 
     def _people(self, c: Choice) -> tuple[list[str], list[str]]:
         """Teachers and sections as IDs; "me" is the sender: a teacher, or a class representative's section."""

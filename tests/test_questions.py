@@ -301,3 +301,12 @@ def test_the_sections_list_says_what_each_studies(world, week):
 def test_classes_with_nobody_named_are_everyones(world, week):
     reply = Answerer(world.instance, person(world, "Dr. Menon")).answer(ToolCall("classes_of", {"days": ["Fri"]}, WEEK), week)
     assert reply.startswith(f"Classes on Friday in week {WEEK}: ") and "Dr." in reply  # each with its teacher
+
+
+def test_a_role_is_said_with_who_holds_it(world, week):
+    a = Answerer(world.instance, person(world, "Dr. Menon"))
+    head = next(f for f in world.instance.faculty if f.role.value == "hod")
+    reply = a.answer(ToolCall("free_hours", {"teachers": [head.id], "as_role": {head.id: "hod"}}, WEEK), week)
+    assert reply.startswith(f"The HOD ({head.name}) is free on") or reply.startswith(f"The HOD ({head.name}) has no")
+    who = a.answer(ToolCall("describe", {"teacher": head.id, "as_role": {head.id: "hod"}}, WEEK), week)
+    assert who.startswith(f"The HOD is {head.name}, who teaches")
