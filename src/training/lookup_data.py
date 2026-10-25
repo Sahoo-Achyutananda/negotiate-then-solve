@@ -41,8 +41,8 @@ from pathlib import Path
 from agents.questions import ToolCall
 from agents.tool_agent import SYSTEM, Choice, ToolAgent
 from core.instance import Faculty, Group, Instance, Room
-from evaluation.lookup_set import (PLACEHOLDER, SEMESTER_START, TEMPLATES as TEST_TEMPLATES, Filled, TemplateFiller,
-                                   right, with_first_names)
+from evaluation.lookup_set import (PLACEHOLDER, SEMESTER_START, TEMPLATES as TEST_TEMPLATES, TEMPLATES_V2 as TEST_TEMPLATES_V2,
+                                   Filled, TemplateFiller, right, with_first_names)
 
 ROOT = Path(__file__).parents[2]
 TEMPLATES = ROOT / "data" / "lookup-train-templates.jsonl"
@@ -55,10 +55,16 @@ SURNAMES = ["Reddy", "Nair", "Joshi", "Banerjee", "Kulkarni", "Hegde", "Saxena",
             "Qureshi", "Varma", "Shetty", "Agarwal", "Ghosh", "Patil", "Sinha", "Fernandes", "Rao", "Kapoor"]
 
 
-def renamed(instance: Instance, rng: random.Random, first_names: bool) -> Instance:
+def renamed(instance: Instance, rng: random.Random, first_names: bool, move_hod: bool = False) -> Instance:
     """A copy of the department whose teachers have other names (with or without first names; sometimes two
-    with the same first name, so "ambiguous" has examples)."""
+    with the same first name, so "ambiguous" has examples). ``move_hod``: another teacher is the HOD, so "the
+    HOD" is learned as a role to look up, not as a name."""
     data = instance.model_dump()
+    if move_hod:
+        roles = [f["role"] for f in data["faculty"]]
+        rng.shuffle(roles)
+        for f, role in zip(data["faculty"], roles, strict=True):
+            f["role"] = role
     surnames = rng.sample(SURNAMES, len(data["faculty"]))
     firsts = rng.sample(FIRSTS, len(data["faculty"]))
     if first_names and rng.random() < 0.5:
@@ -69,11 +75,20 @@ def renamed(instance: Instance, rng: random.Random, first_names: bool) -> Instan
     return Instance.model_validate(data)
 
 
+SHARED_SEEDS = (4, 5, 6, 7)  # v2: generated departments with shared courses (seeds 2, 3 and 8 are test runs B and D)
+
+
 def departments(instance: Instance, seed: int) -> list[tuple[str, Instance]]:
-    """The departments the questions are asked in: the team's, the first-name copy, and four renamed ones."""
+    """The departments the questions are asked in: the team's, the first-name copy, four renamed ones (the HOD
+    moved in two of them), and, since v2, departments with courses as they usually are (one course for every
+    section, some with two teachers), renamed, so no department's facts can be learned."""
+    from evaluation.lookup_set import department
+
     rng = random.Random(f"departments-{seed}")
     out = [("original", instance), ("first-names", with_first_names(instance))]
-    out += [(f"renamed-{k}", renamed(instance, rng, first_names=k % 2 == 0)) for k in range(4)]
+    out += [(f"renamed-{k}", renamed(instance, rng, first_names=k % 2 == 0, move_hod=k >= 2)) for k in range(4)]
+    out += [(f"shared-s{s}", renamed(department(instance, s, shared=True), rng, first_names=s % 2 == 0, move_hod=True))
+            for s in SHARED_SEEDS]
     return out
 
 
@@ -101,7 +116,7 @@ def choice_for(row: dict, filled: Filled, filler: TemplateFiller, current_week: 
     or its expected lookup written the way the model answers (names, not IDs; "me" kept)."""
     if row.get("choice"):
         c = {k: _named(k, v, filler) for k, v in row["choice"].items()}
-        return Choice(**{"week": current_week, **c})
+        return Choice(**{"week": filled.week, **c})  # the question's week ("next week"), not always this one
     if row["tool"] is None:
         return Choice(tool="none", week=current_week)
     a, c = row.get("args", {}), {"tool": row["tool"], "week": filled.week}
@@ -123,8 +138,10 @@ def choice_for(row: dict, filled: Filled, filler: TemplateFiller, current_week: 
             c["hours"] = [filler._label(key, v) for v in value]
         elif key == "course":
             c["course"] = _named(key, value, filler)
-        elif key in ("part", "length", "kind", "min_capacity", "what", "next", "count"):
-            c[key] = filler._label(key, value) if key != "next" else True
+        elif key in ("part", "length", "kind", "min_capacity", "what", "next", "count", "first", "change"):
+            c[key] = filler._label(key, value) if key not in ("next", "first") else True
+        elif key == "roles":  # v2: the role, never who holds it
+            c["roles"] = list(value)
         elif key == "equipment":
             c["equipment"] = [filler._label(key, v) for v in value]
         else:
@@ -164,7 +181,8 @@ def _shape(template: str) -> str:
 def build(instance: Instance, fills: int, seed: int) -> tuple[list[dict], list[dict], list[str], Counter]:
     """Train rows, validation rows, the rows left out (with why) and what the data covers."""
     rows = [json.loads(x) for x in TEMPLATES.read_text(encoding="utf-8").splitlines() if x.strip()]
-    test = {_shape(json.loads(x)["template"]) for x in TEST_TEMPLATES.read_text(encoding="utf-8").splitlines() if x.strip()}
+    test = {_shape(json.loads(x)["template"]) for path in (TEST_TEMPLATES, TEST_TEMPLATES_V2) if path.exists()
+            for x in path.read_text(encoding="utf-8").splitlines() if x.strip()}
     if clash := [r["id"] for r in rows if _shape(r["template"]) in test]:
         raise SystemExit(f"training templates that are test templates (change them): {clash}")
     depts = departments(instance, seed)

@@ -57,7 +57,16 @@ def generate_department(
     n_lecture_rooms: int = 15,
     n_labs: int = 5,
     calendar: Calendar | None = None,
+    shared_courses: bool = False,
+    co_teaching: float = 0.0,
 ) -> Instance:
+    """``shared_courses``: courses as departments usually have them: each course (one ID, one name) is taken by
+    every section, with the same teacher(s) for all of them; ``courses_per_group`` is then the number of courses.
+    ``co_teaching``: the share of those courses with two teachers sharing the classes. Both off by default: the
+    departments made so far (the app's, the tests', the solver's) are unchanged."""
+    if shared_courses:
+        return _shared(seed, n_faculty, n_groups, courses_per_group, lectures_per_course, lab_share,
+                       n_lecture_rooms, n_labs, calendar, co_teaching)
     rng = random.Random(seed)
 
     rooms = [
@@ -130,3 +139,39 @@ def generate_department(
         sessions=sessions,
         course_titles=titles,
     )
+
+
+def _shared(seed: int, n_faculty: int, n_groups: int, n_courses: int, lectures_per_course: int, lab_share: float,
+            n_lecture_rooms: int, n_labs: int, calendar: Calendar | None, co_teaching: float) -> Instance:
+    """``generate_department`` with shared courses: one course for every section, the same teacher(s) for all;
+    with two teachers, they take the course's classes in turn (in every section the same way), and the second
+    one the practical."""
+    base = generate_department(seed, n_faculty=n_faculty, n_groups=n_groups, courses_per_group=1,
+                               n_lecture_rooms=n_lecture_rooms, n_labs=n_labs, calendar=calendar)
+    rng = random.Random(f"shared-{seed}")
+    faculty, groups = base.faculty, base.groups
+    load: Counter[str] = Counter()
+    sessions: list[Session] = []
+    titles: dict[str, str] = {}
+    for k in range(n_courses):
+        course = f"C-{k + 1:02d}"
+        titles[course] = COURSE_TITLES[k % len(COURSE_TITLES)]
+        pair = rng.random() < co_teaching
+        chosen = sorted(faculty, key=lambda f: (load[f.id], rng.random()))[: 2 if pair else 1]
+        teachers = [f.id for f in chosen]
+        practical = rng.random() < lab_share
+        needs = rng.choice(PRACTICAL_NEEDS)
+        for g in groups:
+            for j in range(lectures_per_course):
+                who = teachers[j % len(teachers)]
+                sessions.append(Session(id=f"{course}-{g.id}-L{j + 1}", course=course, kind=SessionKind.LECTURE,
+                                        faculty=who, groups=[g.id]))
+                load[who] += 1
+            if practical:
+                who = teachers[-1]
+                sessions.append(Session(id=f"{course}-{g.id}-P", course=course, kind=SessionKind.PRACTICAL,
+                                        faculty=who, groups=[g.id], duration=2, room_type=RoomType.LAB,
+                                        equipment=needs))
+                load[who] += 2
+    return base.model_copy(update={"name": f"synthetic-cse-s{seed}-shared", "sessions": sessions,
+                                   "course_titles": titles})

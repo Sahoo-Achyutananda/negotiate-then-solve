@@ -158,3 +158,70 @@
 {"id": "L-158", "group": "unclear", "template": "does {shared_first} have a class at {time.any} on {day.any}", "tool": "unclear", "choice": {"tool": "free_hours", "teachers": ["{shared_first}"], "ambiguous": ["{shared_first}"], "days": ["{day}"], "hours": ["{time}"]}}
 {"id": "L-159", "group": "unclear", "template": "find a free hour for me and {shared_first} {when}", "tool": "unclear", "choice": {"tool": "free_hours", "teachers": ["me", "{shared_first}"], "ambiguous": ["{shared_first}"]}}
 {"id": "L-160", "group": "unclear", "template": "which subjects are taken by {shared_first}?", "tool": "unclear", "choice": {"tool": "describe", "teachers": ["{shared_first}"], "ambiguous": ["{shared_first}"]}}
+{"id": "L-161", "group": "all", "template": "when are all the teachers free together {when}?", "tool": "free_hours", "args": {"teachers": ["all"]}}
+{"id": "L-162", "group": "all", "template": "find a slot when every faculty member is free {when}", "tool": "free_hours", "args": {"teachers": ["all"]}}
+{"id": "L-163", "group": "all", "template": "is the whole faculty free on {day.any} at {time.any}?", "tool": "free_hours", "args": {"teachers": ["all"], "days": ["{day}"], "slots": ["{time}"]}}
+{"id": "L-164", "group": "all", "template": "when are all sections free at the same time {when}", "tool": "free_hours", "args": {"sections": ["all"]}}
+{"id": "L-165", "group": "all", "template": "is every section free on {day.any} {part}?", "tool": "free_hours", "args": {"sections": ["all"], "days": ["{day}"], "part": "{part}"}}
+{"id": "L-166", "group": "all", "template": "when are all the sections and I free {when}", "tool": "free_hours", "args": {"teachers": ["me"], "sections": ["all"]}}
+{"id": "L-167", "group": "all", "template": "show the courses of each section", "tool": "describe", "args": {"what": "sections"}}
+{"id": "L-168", "group": "all", "template": "what does every section study?", "tool": "describe", "args": {"what": "sections"}}
+{"id": "L-169", "group": "all", "template": "list each teacher with their subjects", "tool": "describe", "args": {"what": "teachers"}}
+{"id": "L-170", "group": "all", "template": "which teachers teach on {day.any}?", "tool": "classes_of", "args": {"days": ["{day}"]}, "choice": {"tool": "classes_of", "teachers": ["all"], "days": ["{day}"]}}
+{"id": "L-171", "group": "all", "template": "what classes does everyone have on {day.any} {when}", "tool": "classes_of", "args": {"days": ["{day}"]}, "choice": {"tool": "classes_of", "teachers": ["all"], "days": ["{day}"]}}
+{"id": "L-172", "group": "all", "template": "what changed for every section {when}?", "tool": "changes", "args": {}, "choice": {"tool": "changes", "sections": ["all"]}}
+{"id": "L-173", "group": "roles", "template": "when is the HOD free {when}?", "tool": "free_hours", "args": {"roles": ["hod"]}}
+{"id": "L-174", "group": "roles", "template": "is the HoD free on {day.any} at {time.any}?", "tool": "free_hours", "args": {"roles": ["hod"], "days": ["{day}"], "slots": ["{time}"]}}
+{"id": "L-175", "group": "roles", "template": "i need to meet the head of department {when}, when is the head free", "tool": "free_hours", "args": {"roles": ["hod"]}}
+{"id": "L-176", "group": "roles", "template": "when are the HOD and I both free {when}", "tool": "free_hours", "args": {"teachers": ["me"], "roles": ["hod"]}}
+{"id": "L-177", "group": "roles", "template": "what does the HOD teach on {day.any}?", "tool": "classes_of", "args": {"roles": ["hod"], "days": ["{day}"]}}
+{"id": "L-178", "group": "roles", "template": "who is our head of department?", "tool": "describe", "args": {"roles": ["hod"]}}
+{"id": "L-179", "group": "roles", "template": "how many hours does the HOD teach {when}?", "tool": "classes_of", "args": {"roles": ["hod"], "count": true}}
+{"id": "L-180", "group": "roles", "template": "when can the HOD, {section.any} and I all meet {when}?", "tool": "free_hours", "args": {"teachers": ["me"], "sections": ["{section}"], "roles": ["hod"]}}
+{"id": "L-181", "group": "roles", "template": "when is the HOD free for us {when}?", "tool": "free_hours", "args": {"sections": ["me"], "roles": ["hod"]}, "asker": "rep"}
+{"id": "L-182", "group": "roles", "template": "when are the class reps free together {when}?", "tool": "free_hours", "args": {"roles": ["student"]}}
+{"id": "L-183", "group": "roles", "template": "when is the timetable office free?", "tool": "unclear", "choice": {"tool": "free_hours", "roles": ["coordinator"]}}
+{"id": "L-184", "group": "roles", "template": "is the lab in-charge free on {day.any}?", "tool": "unclear", "choice": {"tool": "free_hours", "roles": ["lab_incharge"], "days": ["{day}"]}}
+{"id": "L-185", "group": "roles", "template": "when is the exam cell available {when}", "tool": "unclear", "choice": {"tool": "free_hours", "roles": ["exam_cell"]}}
+{"id": "L-186", "group": "roles", "template": "when is the dean free {when}?", "tool": "unclear", "choice": {"tool": "free_hours", "roles": ["dean"]}}
+{"id": "L-187", "group": "roles", "template": "is any guest faculty free on {day.any}?", "tool": "unclear", "choice": {"tool": "free_hours", "roles": ["guest_faculty"], "days": ["{day}"]}}
+{"id": "L-188", "group": "mixed", "template": "when are {teacher.any}, {teacher2.any} and I all free {when}?", "tool": "free_hours", "args": {"teachers": ["me", "{teacher}", "{teacher2}"]}}
+{"id": "L-189", "group": "mixed", "template": "when are {section.any}, {section2.any} and {room.any} all free {when}", "tool": "free_hours", "args": {"sections": ["{section}", "{section2}"], "rooms": ["{room}"]}}
+{"id": "L-190", "group": "mixed", "template": "find a common free hour for {teacher.any}, {section.any} and {lab.any} {when}", "tool": "free_hours", "args": {"teachers": ["{teacher}"], "sections": ["{section}"], "rooms": ["{lab}"]}}
+{"id": "L-191", "group": "mixed", "template": "are {teacher.any}, {teacher2.any} and {teacher3.any} free on {day.any}?", "tool": "free_hours", "args": {"teachers": ["{teacher}", "{teacher2}", "{teacher3}"], "days": ["{day}"]}}
+{"id": "L-192", "group": "mixed", "template": "when are {section.any}, {section2.any} and {section3.any} free together {when}?", "tool": "free_hours", "args": {"sections": ["{section}", "{section2}", "{section3}"]}}
+{"id": "L-193", "group": "mixed", "template": "{section.any} and {section2.any}: when are both free on {day.any}?", "tool": "free_hours", "args": {"sections": ["{section}", "{section2}"], "days": ["{day}"]}}
+{"id": "L-194", "group": "course", "template": "when is the {course.any} teacher free {when}?", "tool": "free_hours", "args": {"course": "{course}"}}
+{"id": "L-195", "group": "course", "template": "who teaches {course.any} and when is that teacher free {when}?", "tool": "free_hours", "args": {"course": "{course}"}}
+{"id": "L-196", "group": "course", "template": "is the {course.any} faculty free on {day.any}?", "tool": "free_hours", "args": {"course": "{course}", "days": ["{day}"]}}
+{"id": "L-197", "group": "course", "template": "when are I and the {course.any} teacher both free {when}", "tool": "free_hours", "args": {"teachers": ["me"], "course": "{course}"}}
+{"id": "L-198", "group": "course", "template": "when are both {course.any} teachers free together?", "tool": "free_hours", "args": {"teachers": ["all"], "course": "{course}"}}
+{"id": "L-199", "group": "course", "template": "when is our {course.any} teacher free {when}?", "tool": "free_hours", "args": {"course": "{course}"}, "asker": "rep"}
+{"id": "L-200", "group": "first", "template": "what is the earliest I am free {when}?", "tool": "free_hours", "args": {"teachers": ["me"], "first": true}}
+{"id": "L-201", "group": "first", "template": "earliest free hour for {section.any} and me {when}", "tool": "free_hours", "args": {"teachers": ["me"], "sections": ["{section}"], "first": true}}
+{"id": "L-202", "group": "first", "template": "first time {teacher.any} and I are both free {when}", "tool": "free_hours", "args": {"teachers": ["me", "{teacher}"], "first": true}}
+{"id": "L-203", "group": "first", "template": "when is the soonest {section.any} is free on {day.any}?", "tool": "free_hours", "args": {"sections": ["{section}"], "days": ["{day}"], "first": true}}
+{"id": "L-204", "group": "first", "template": "earliest 2-hour window when {teacher.any} and I are free {when}", "tool": "free_hours", "args": {"teachers": ["me", "{teacher}"], "length": 2, "first": true}}
+{"id": "L-205", "group": "change_kind", "template": "any classes cancelled {when}?", "tool": "changes", "args": {"change": "cancelled"}}
+{"id": "L-206", "group": "change_kind", "template": "is any of my classes off {when}?", "tool": "changes", "args": {"teacher": "me", "change": "cancelled"}}
+{"id": "L-207", "group": "change_kind", "template": "were any classes rescheduled {when}", "tool": "changes", "args": {"change": "moved"}}
+{"id": "L-208", "group": "change_kind", "template": "has {section.any} got any extra classes {when}?", "tool": "changes", "args": {"section": "{section}", "change": "extra"}}
+{"id": "L-209", "group": "change_kind", "template": "is any class of {teacher.any} not happening {when}?", "tool": "changes", "args": {"teacher": "{teacher}", "change": "cancelled"}}
+{"id": "L-210", "group": "change_kind", "template": "were my lectures moved around {when}?", "tool": "changes", "args": {"teacher": "me", "change": "moved"}}
+{"id": "L-211", "group": "change_kind", "template": "do we have any extra class {when}?", "tool": "changes", "args": {"section": "me", "change": "extra"}, "asker": "rep"}
+{"id": "L-212", "group": "change_kind", "template": "is anything cancelled for us {when}", "tool": "changes", "args": {"section": "me", "change": "cancelled"}, "asker": "rep"}
+{"id": "L-213", "group": "rooms", "template": "when is {lab.any} not in use {when}?", "tool": "free_hours", "args": {"rooms": ["{lab}"]}}
+{"id": "L-214", "group": "rooms", "template": "is {room.any} empty on {day.any} at {time.any}?", "tool": "free_hours", "args": {"rooms": ["{room}"], "days": ["{day}"], "slots": ["{time}"]}}
+{"id": "L-215", "group": "rooms", "template": "when is nobody using {room.any} on {day.any}", "tool": "free_hours", "args": {"rooms": ["{room}"], "days": ["{day}"]}}
+{"id": "L-216", "group": "missed", "template": "do I have any free time this afternoon?", "tool": "free_hours", "args": {"teachers": ["me"], "days": ["{today}"], "part": "afternoon"}, "week": "{today}"}
+{"id": "L-217", "group": "missed", "template": "free slots {day.any} morning for me?", "tool": "free_hours", "args": {"teachers": ["me"], "days": ["{day}"], "part": "morning"}}
+{"id": "L-218", "group": "missed", "template": "is {teacher.any} free when we are free {when}?", "tool": "free_hours", "args": {"sections": ["me"], "teachers": ["{teacher}"]}, "asker": "rep"}
+{"id": "L-219", "group": "missed", "template": "can any section attend a guest lecture on {day.any} {part}?", "tool": "who_is_free", "args": {"days": ["{day}"], "part": "{part}", "sections": true}}
+{"id": "L-220", "group": "missed", "template": "when is the lunch break?", "tool": "describe", "args": {"what": "calendar"}}
+{"id": "L-221", "group": "missed", "template": "a 2 hour slot for {section.any} and me with a lab that has {equipment}", "tool": "free_hours", "args": {"teachers": ["me"], "sections": ["{section}"], "length": 2, "kind": "lab", "equipment": ["{equipment}"]}}
+{"id": "L-222", "group": "missed", "template": "any lab free on {date.any}?", "tool": "free_rooms", "args": {"kind": "lab", "days": ["{date}"]}, "week": "{date}"}
+{"id": "L-223", "group": "request", "template": "can I get {day.any} off {when}?", "tool": null, "args": {}}
+{"id": "L-224", "group": "request", "template": "would {teacher.any} be able to take my {day.any} class?", "tool": null, "args": {}}
+{"id": "L-225", "group": "request", "template": "our {course.any} class overlaps with another class on {day.any}", "tool": null, "args": {}, "asker": "rep"}
+{"id": "L-226", "group": "request", "template": "could the HOD take my lecture on {day.any}?", "tool": null, "args": {}}
+{"id": "L-227", "group": "request", "template": "please give all sections a free period on {day.any}", "tool": null, "args": {}}

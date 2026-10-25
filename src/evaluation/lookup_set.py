@@ -32,6 +32,7 @@ from core.instance import Faculty, Group, Instance, Room
 from language.corpus import FULL_DAY, hour
 
 TEMPLATES = Path(__file__).parents[2] / "data" / "lookup-test-templates.jsonl"
+TEMPLATES_V2 = Path(__file__).parents[2] / "data" / "lookup-test-templates-v2.jsonl"  # the kinds v2 adds
 NOW = datetime(2026, 10, 21, 10, 30)  # a Wednesday morning in week 13: "today", "tomorrow", "next class"
 WEEK = 13
 SEMESTER_START = date(2026, 7, 27)  # Monday of week 1 (the semester planner's start), so NOW is in week 13
@@ -52,7 +53,7 @@ def with_first_names(instance: Instance) -> Instance:
     return Instance.model_validate(data)
 
 
-def department(base: Instance, seed: int | None = None, shuffle: bool = False) -> Instance:
+def department(base: Instance, seed: int | None = None, shuffle: bool = False, shared: bool = False) -> Instance:
     """The department to ask about (ROADMAP step 6: does the model read the question, or remember the department
     it was trained on?). ``seed``: one made by ``core.generator`` with the same numbers of teachers, sections,
     courses and rooms as ``base`` (other teacher-course pairs, section sizes, rooms with labs); None: ``base``.
@@ -63,10 +64,12 @@ def department(base: Instance, seed: int | None = None, shuffle: bool = False) -
         from core.generator import generate_department
 
         courses = len(base.course_titles) // max(len(base.groups), 1)
-        made = generate_department(
-            seed, n_faculty=len(base.faculty), n_groups=len(base.groups), courses_per_group=max(courses, 1),
+        made = generate_department(  # ``shared``: courses as departments have them, some with two teachers
+            seed, n_faculty=len(base.faculty), n_groups=len(base.groups),
+            courses_per_group=max(len(base.course_titles) // 2, 1) if shared else max(courses, 1),
             n_lecture_rooms=sum(r.type.value == "lecture" for r in base.rooms),
-            n_labs=sum(r.type.value == "lab" for r in base.rooms), calendar=base.calendar)
+            n_labs=sum(r.type.value == "lab" for r in base.rooms), calendar=base.calendar,
+            shared_courses=shared, co_teaching=0.4 if shared else 0.0)
         pairs = lambda i: {(s.course, s.faculty) for s in i.sessions}  # noqa: E731
         if pairs(made) == pairs(base) and [g.size for g in made.groups] == [g.size for g in base.groups]:
             # the app's own department is a generated one (seed 1 at the demo's size): that seed asks it again
@@ -131,10 +134,47 @@ class TemplateFiller:
         if args.pop("next", False):
             week, after = from_now(self.instance, self.current_week, self.now)
             args["after"] = list(after)
+        self._resolve(row["tool"], args)
         also = [{"tool": a["tool"], "args": {k: self._label(k, v) for k, v in a.get("args", {}).items()}}
                 for a in row.get("also", [])]
         return Filled(row["id"], row.get("group", row["tool"] or "none"), question, self.asker, row["tool"],
                       {k: v for k, v in args.items() if v not in (None, [], False)}, week, also)
+
+    def _resolve(self, tool: str | None, args: dict) -> None:
+        """The words the model writes for the code to resolve (v2), turned into the IDs the lookup ends with, as
+        ``ToolAgent`` resolves them in this department: ``"all"`` (every teacher, section or room), ``roles``
+        (whoever holds them here) and, in ``free_hours``, a ``course`` (its teachers; with ``"all"`` teachers,
+        only the course's: "both DS teachers")."""
+        i = self.instance
+        course = args.pop("course", None) if tool == "free_hours" else None
+        every = {"teachers": [f.id for f in i.faculty], "sections": [g.id for g in i.groups],
+                 "rooms": [r.id for r in i.rooms]}
+        for key, ids in every.items():
+            if isinstance(args.get(key), list) and "all" in args[key]:  # who_is_free's "sections" is a flag
+                rest = [x for x in args[key] if x != "all"]
+                args[key] = rest if key == "teachers" and course else list(dict.fromkeys(rest + ids))
+        if course:
+            taught = [s.faculty for s in i.sessions if s.course == course]
+            args["teachers"] = list(dict.fromkeys(args.get("teachers", []) + taught))
+        roles = args.pop("roles", [])
+        for role in roles:
+            holders = [p for p, r in self.roles_of.items() if r == role]
+            args.setdefault("teachers", []).extend(p for p in holders if p in i.faculty_by_id and p not in args["teachers"])
+            reps = [p[3:] for p in holders if p.startswith("ST-") and p[3:] in i.group_by_id]
+            args.setdefault("sections", []).extend(g for g in reps if g not in args["sections"])
+        if roles and tool in ("describe", "classes_of", "changes"):  # tools of one person: "teacher", "section"
+            for many, one in (("teachers", "teacher"), ("sections", "section")):
+                if len(found := args.pop(many, [])) == 1:
+                    args[one] = found[0]
+
+    @property
+    def roles_of(self) -> dict[str, str]:
+        """Who holds which role in this department: the sign-in directory the app (and ToolAgent) builds."""
+        if not hasattr(self, "_roles_of"):
+            from pipeline.ingest import Directory as People
+
+            self._roles_of = {x.person: x.role.value for x in People.from_instance(self.instance).by_email.values()}
+        return self._roles_of
 
     # -- what a placeholder is: picked once per question, so "{teacher}" is the same teacher everywhere ----
 
@@ -340,9 +380,12 @@ def right(f: Filled, call: ToolCall | None) -> bool:
     return any(call.tool == want["tool"] and _norm(call.args) == _norm(want["args"]) for want in wants)
 
 
+SAID_ONLY = {"as_role", "via_course", "each"}  # how the answer is worded, worked out from the rest: not scored
+
+
 def _norm(args: dict) -> dict:
     return {k: sorted(v) if isinstance(v, list) and k != "after" else v
-            for k, v in args.items() if v not in (None, [], False)}
+            for k, v in args.items() if v not in (None, [], False) and k not in SAID_ONLY}
 
 
 class Unreachable(Exception):
@@ -392,6 +435,10 @@ def main() -> None:
     ap.add_argument("--department", type=int, metavar="SEED", default=None,
                     help="ask about a generated department of the same size (not the app's; ROADMAP step 6)")
     ap.add_argument("--shuffle", action="store_true", help="move names, the HOD and course titles around")
+    ap.add_argument("--shared", action="store_true",
+                    help="with --department: courses shared by every section, some with two teachers (run D)")
+    ap.add_argument("--templates", type=Path, default=TEMPLATES,
+                    help=f"the test templates (default {TEMPLATES.name}; v2's new kinds: {TEMPLATES_V2.name})")
     ap.add_argument("--resume", action="store_true",
                     help="keep the questions already in --out and ask only the rest (after a dropped connection)")
     a = ap.parse_args()
@@ -399,9 +446,11 @@ def main() -> None:
     from web.app import World
 
     w = World(parser_mode="offline", seed_history=False, deadline=60)
-    instance = with_first_names(department(w.instance, a.department, a.shuffle))
+    if a.shared and a.department is None:
+        raise SystemExit("--shared needs --department SEED")
+    instance = with_first_names(department(w.instance, a.department, a.shuffle, a.shared))
     print("department:", instance.name)
-    rows = [json.loads(x) for x in TEMPLATES.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = [json.loads(x) for x in a.templates.read_text(encoding="utf-8").splitlines() if x.strip()]
     questions = fill_all(instance, rows, a.fills, a.seed)
     client, model = None, None
     from agents.tool_agent import ToolAgent
