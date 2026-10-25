@@ -67,6 +67,10 @@ ROLE_NAMES = {"hod": "the HOD", "coordinator": "the timetable coordinator", "lab
               "student": "the class representatives"}
 
 
+# "changes" of one kind, as the model names them -> as WeekTimetable.changes() gives them
+CHANGE_KINDS = {"cancelled": "not_held", "moved": "moved", "extra": "extra"}
+
+
 def role_name(role: str) -> str:
     return ROLE_NAMES.get(role, f"the {role.replace('_', ' ')}")
 
@@ -326,22 +330,38 @@ class Answerer:
         free = self._in_part(free, a)
         who, plural = self._who(a)
         when = f"week {call.week}"
+        taught = ""  # "when is the DS teacher free?": who that is, first
+        if a.get("via_course"):
+            course_teachers = {s.faculty for s in self.instance.sessions if s.course == a["via_course"]}
+            by = [self.instance.faculty_by_id[f].name for f in a.get("teachers", []) if f in course_teachers]
+            taught = f"{self.instance.course_title(a['via_course'])} is taught by {_listed(by)}. "
+        if a.get("each"):  # co-teachers: each one's free time on its own, with whoever else was asked about
+            co = [t for t in a.get("teachers", []) if t in course_teachers]
+            rest = [t for t in a.get("teachers", []) if t not in co]
+            parts = [self._free(ToolCall("free_hours", {**a, "teachers": rest + [t], "each": False, "via_course": None},
+                                         call.week), week) for t in co]
+            return taught + " ".join(parts)
+        if a.get("first") and free:  # only the earliest: the first hour, or the first run of ``length`` hours
+            day, slot = free[0]
+            run = [(day, s) for s in range(slot, slot + a.get("length", 1)) if (day, s) in free]
+            both = " both" if plural and len(self._people(a)) == 2 else ""
+            return taught + _cap(f"the earliest {who} {'are' if plural else 'is'}{both} free is {_spans(run)} ({when}).")
         if a.get("slots"):  # "is Lab 2 free on Thursday at 3 pm?": yes or no for those hours
             days = a.get("days") or self.instance.calendar.days
             asked = [(d, s) for d in days for s in a["slots"]]
             taken = [h for h in asked if h not in free]
             at = ", ".join(f"{FULL_DAY[d]} {hour(s)}" for d, s in asked)
             if not taken:
-                return f"Yes, {who} {'are' if plural else 'is'} free on {at} ({when})."  # who mid-sentence
-            return f"No, {who} {'are' if plural else 'is'} not free on " \
+                return taught + f"Yes, {who} {'are' if plural else 'is'} free on {at} ({when})."  # who mid-sentence
+            return taught + f"No, {who} {'are' if plural else 'is'} not free on " \
                    f"{', '.join(f'{FULL_DAY[d]} {hour(s)}' for d, s in taken)} ({when})."
         run = f" ({a['length']} hours in a row)" if a.get("length", 1) > 1 else ""
         if not free:
             on = f" on {', '.join(FULL_DAY[d] for d in a['days'])}" if a.get("days") else ""
             part = f" in the {a['part']}" if a.get("part") else ""
-            return _cap(f"{who} {'have' if plural else 'has'} no free hours{run}{on}{part} in {when}.")
+            return taught + _cap(f"{who} {'have' if plural else 'has'} no free hours{run}{on}{part} in {when}.")
         both = " both" if plural and len(self._people(a)) == 2 else ""
-        return _cap(f"{who} {'are' if plural else 'is'}{both} free{run} on {_spans(free)} ({when}).")
+        return taught + _cap(f"{who} {'are' if plural else 'is'}{both} free{run} on {_spans(free)} ({when}).")
 
     def _free_with_room(self, call: ToolCall, week: WeekTimetable) -> str:
         """ "When can Section 1 and I have a 2-hour class in a lab?": per room, the hours when it and they are free."""
@@ -447,6 +467,20 @@ class Answerer:
         whose = "" if not (a.get("teacher") or a.get("section")) else " for " + self._who(
             {"teachers": [a["teacher"]] if a.get("teacher") else [],
              "sections": [a["section"]] if a.get("section") else [], "as_role": a.get("as_role", {})})[0]
+        if kind := a.get("change"):  # "any cancelled classes next week?": yes or no, about that kind only
+            mine = [c for c in found if c.kind == CHANGE_KINDS[kind]]
+            others, found = len(found) - len(mine), mine
+            if not found:
+                none = (f"There are no extra classes{whose} in week {call.week}." if kind == "extra" else
+                        f"No classes{whose} are {'cancelled' if kind == 'cancelled' else 'moved'} in week {call.week}.")
+                more = (f" ({others} other change{'s' if others != 1 else ''} that week: ask what changed to see "
+                        f"{'them' if others != 1 else 'it'}.)") if others else ""
+                return none + more
+            n = len(found)
+            done = {"cancelled": "not held", "moved": "moved", "extra": "added"}[kind]
+            lead = f"Yes, {n} class{'es' if n != 1 else ''}{whose} {'is' if n == 1 else 'are'} {done} in week {call.week}: "
+        else:
+            lead = f"Changes{whose} in week {call.week}: "
         if not found:
             return f"No changes{whose} in week {call.week}: the timetable is as planned."
         said = []
@@ -459,7 +493,7 @@ class Answerer:
                             f"{FULL_DAY[c.after.day]} {hour(c.after.slot)}")
             else:
                 said.append(f"extra {what} on {FULL_DAY[c.after.day]} {hour(c.after.slot)}")
-        return f"Changes{whose} in week {call.week}: " + "; ".join(said) + "."
+        return lead + "; ".join(said) + "."
 
     def _in_part(self, hours: list[tuple[str, int]], a: dict) -> list[tuple[str, int]]:
         """Only the morning's or the afternoon's hours, when the question says which."""

@@ -45,6 +45,8 @@ Tools (the fields to fill; leave the others empty):
   free_hours  - the hours when ALL the given teachers, sections and rooms are free.
                 "my free slots", "when are Dr. Iyer and I both free?", "is Lab 2 free on Thursday at 3 pm?".
                 Fill: teachers, sections, rooms; optionally days, hours, part, length.
+                A course's teachers ("when is the DS teacher free?", "who teaches OS and when is she free?"):
+                course. Only the earliest time ("the earliest Section 1 and I are both free"): first=true.
                 A room is needed too ("when can Section 1 and I use a lab for 2 hours?"): also kind,
                 and optionally equipment, min_capacity.
   classes_of  - the classes of one teacher, one section, one room or one course (or a combination).
@@ -63,6 +65,8 @@ Tools (the fields to fill; leave the others empty):
                 or one thing in teachers, sections, rooms or course.
   changes     - how a week differs from the usual timetable: classes not held, moved, extra classes.
                 "what changed this week?", "was my class cancelled?". Optionally teachers or sections (one).
+                Only one kind ("any cancelled classes next week?", "is my lecture off?", "any extra classes?"):
+                change ("cancelled", "moved" or "extra").
   unanswerable - a question about the timetable that must not or cannot be answered: why someone is
                 absent or a class is not held (reason "private"); holidays, exam dates (reason "not_in_data").
   none        - not a question about the timetable: a request to change something (move, cancel, swap,
@@ -108,11 +112,13 @@ class Choice(BaseModel):
     hours: list[int] = Field(default_factory=list, description="slot numbers")
     part: Literal["morning", "afternoon"] | None = None
     length: int | None = Field(None, description="hours in a row")
+    first: bool = Field(False, description="only the earliest free time")
     kind: Literal["lecture", "lab"] | None = None
     equipment: list[str] = Field(default_factory=list)
     min_capacity: int | None = None
     next: bool = False
     count: bool = False
+    change: Literal["cancelled", "moved", "extra"] | None = Field(None, description="changes of one kind only")
     of: Literal["teachers", "sections"] | None = None
     what: Literal["rooms", "sections", "teachers", "courses", "calendar"] | None = None
     week: int
@@ -280,7 +286,17 @@ class ToolAgent:
             as_role |= dict.fromkeys(staff + reps, role)
         rooms = ([r.id for r in self.instance.rooms] if _all(c.rooms) else [self._one(r, Room) for r in c.rooms])
         everyone = [k for k, v in (("teachers", c.teachers), ("sections", c.sections), ("rooms", c.rooms)) if _all(v)]
-        course = self._one(c.course, str) if c.course else None
+        each = False  # a course with co-teachers: each one's free time on its own
+        if c.tool == "free_hours" and c.course:  # a course's teacher(s)
+            course, extra = self._course_teachers(c, everyone)
+            each = len(extra) > 1 and "teachers" not in everyone
+            teachers += [f for f in extra if f not in teachers]
+            if "teachers" in everyone:  # "when are both DS teachers free?": all of them, not every teacher
+                me = any(t.lower() == "me" for t in c.teachers)
+                teachers = ([self.sender] if me and self.sender in self.instance.faculty_by_id else []) + \
+                           [f for f in extra if f != self.sender or not me]
+        else:
+            course = self._one(c.course, str) if c.course else None
         days, slots = sorted(c.days, key=cal.days.index), sorted(set(c.hours))
         part = None if slots else c.part  # a time asked about is more exact than "afternoon"
         room_needed = {"kind": c.kind, "equipment": sorted(c.equipment), "min_capacity": c.min_capacity}
@@ -290,10 +306,12 @@ class ToolAgent:
                 raise Problem('free_rooms needs kind: "lecture" or "lab"')
             args = room_needed | {"days": days, "slots": slots, "part": part}
         elif c.tool == "free_hours":
+            via = course  # "when is the DS teacher free?": its teacher(s) added above, said in the answer
             if not (teachers or sections or rooms):
-                raise Problem("free_hours needs at least one teacher, section or room")
+                raise Problem("free_hours needs at least one teacher, section, room or course")
             args = {"teachers": teachers, "sections": sections, "rooms": rooms, "days": days, "slots": slots,
-                    "part": part, "length": c.length if c.length and c.length > 1 else None}
+                    "part": part, "length": c.length if c.length and c.length > 1 else None, "via_course": via,
+                    "first": c.first, "each": each}
             if c.kind or c.equipment or c.min_capacity:  # a room is needed too
                 if not (teachers or sections):
                     raise Problem("a room needed with free_hours goes with teachers or sections; for rooms alone "
@@ -311,7 +329,8 @@ class ToolAgent:
             teachers, sections = ([] if "teachers" in everyone else teachers), ([] if "sections" in everyone else sections)
             if len(teachers) > 1 or len(sections) > 1:
                 raise Problem("changes takes at most one teacher or one section")
-            args = {"teacher": teachers[0] if teachers else None, "section": sections[0] if sections else None}
+            args = {"teacher": teachers[0] if teachers else None, "section": sections[0] if sections else None,
+                    "change": c.change}
         else:  # classes_of
             # "which teachers teach on Friday?": every teacher is no filter on teachers (the same for sections, rooms)
             teachers = [] if "teachers" in everyone else teachers
@@ -334,6 +353,13 @@ class ToolAgent:
         if c.tool == "describe" and not set(args) & {"teacher", "section"}:
             as_role = {}  # a list ("each section"): nobody to say by their role
         return ToolCall(c.tool, {k: v for k, v in args.items() if v} | ({"as_role": as_role} if as_role else {}), c.week)
+
+    def _course_teachers(self, c: Choice, everyone: list[str]) -> tuple[str, list[str]]:
+        """ "When is the DS teacher free?": the course and who teaches it. A course is the same for every section
+        that takes it, and so are its teachers; it may have several (co-teachers): each one's free time is then
+        answered on its own ("each" in the call), or, for "both / all DS teachers", when they are all free."""
+        course = self._one(c.course, str)
+        return course, list(dict.fromkeys(s.faculty for s in self.instance.sessions if s.course == course))
 
     def _one_holder(self, teachers: list[str], sections: list[str], as_role: dict[str, str], week: int) -> ToolCall | None:
         """A tool that takes one teacher (or section), asked about a role several people hold: which one?"""

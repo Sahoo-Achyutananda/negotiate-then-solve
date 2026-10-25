@@ -20,7 +20,7 @@ from __future__ import annotations
 from core.instance import Instance
 
 from .lookup import WeekTimetable, part_slots
-from .questions import ToolCall
+from .questions import CHANGE_KINDS, ToolCall
 
 
 def view_of(instance: Instance, call: ToolCall, week: WeekTimetable, sender: str | None = None) -> dict | None:
@@ -29,6 +29,8 @@ def view_of(instance: Instance, call: ToolCall, week: WeekTimetable, sender: str
     if not call.confident:
         return None
     a = call.args
+    if a.get("each"):  # a course's co-teachers, each on their own: one set of hours would mix them up
+        return None
     if call.tool == "free_hours" and not (a.get("kind") or a.get("equipment") or a.get("min_capacity")):
         return _free_hours(instance, call, week)
     if call.tool == "free_hours":  # a room needed too: one row per room that fits
@@ -51,8 +53,11 @@ def view_of(instance: Instance, call: ToolCall, week: WeekTimetable, sender: str
 
 def free_hours_of(instance: Instance, call: ToolCall, week: WeekTimetable) -> list[tuple[str, int]]:
     """The free hours a ``free_hours`` answer is about, every filter applied: the hours the timetable shades
-    (``/api/ask``'s ``free``). With a room needed too, the hours when the people and at least one such room are free."""
+    (``/api/ask``'s ``free``). With a room needed too, the hours when the people and at least one such room are free.
+    Nothing for co-teachers answered each on their own (``each``)."""
     a = call.args
+    if a.get("each"):
+        return []
     if a.get("kind") or a.get("equipment") or a.get("min_capacity"):
         found = week.free_with_room(a.get("teachers", ()), a.get("sections", ()), a.get("kind"), a.get("equipment", ()),
                                     a.get("min_capacity"), a.get("days"), a.get("length", 1))
@@ -62,7 +67,11 @@ def free_hours_of(instance: Instance, call: ToolCall, week: WeekTimetable) -> li
         free = week.free_hours(a.get("teachers", ()), a.get("sections", ()), a.get("rooms", ()), a.get("days"),
                                length=a.get("length", 1))
     keep = set(a["slots"]) if a.get("slots") else set(part_slots(instance, a["part"])) if a.get("part") else None
-    return [h for h in free if keep is None or h[1] in keep]
+    free = [h for h in free if keep is None or h[1] in keep]
+    if a.get("first") and free:  # only the earliest: its first hour, or its first run of ``length`` hours
+        day, slot = free[0]
+        free = [(day, s) for s in range(slot, slot + a.get("length", 1)) if (day, s) in free]
+    return free
 
 
 # -- layout "week": one timetable -----------------------------------------------------------------------------
@@ -95,6 +104,8 @@ def _changes(instance: Instance, call: ToolCall, week: WeekTimetable) -> dict | 
     a = call.args
     cells = []
     for c in week.changes(a.get("teacher"), a.get("section")):
+        if a.get("change") and c.kind != CHANGE_KINDS[a["change"]]:  # only the kind asked about
+            continue
         if c.kind == "not_held":
             cells.append(_class_cell(instance, c.session, c.before, "cancelled"))
         elif c.kind == "moved":

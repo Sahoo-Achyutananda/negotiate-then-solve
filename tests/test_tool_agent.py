@@ -243,3 +243,64 @@ def test_the_prompt_lists_roles_but_not_who_holds_them(world):
     line = next(x for x in a.client.prompts[0].splitlines() if x.startswith("Roles:"))
     assert "hod (head of department" in line and "faculty (" not in line.replace("guest_faculty (", "")
     assert hod(world).name not in line
+
+
+# -- a course's teachers, the earliest time, changes of one kind ----------------------------------------------
+
+
+def test_a_course_means_its_teachers_in_free_hours(world):
+    s = world.instance.sessions[0]
+    title = world.instance.course_title(s.course)
+    call = agent(world, Choice(tool="free_hours", course=title, week=WEEK)).read(f"when is the {title} teacher free?")
+    assert call.args["teachers"] == [s.faculty] and call.args["via_course"] == s.course
+
+
+def test_earliest_and_changes_of_one_kind_are_kept(world):
+    call = agent(world, Choice(tool="free_hours", teachers=["me"], sections=["Section 1"], first=True, week=WEEK)).read(
+        "the earliest Section 1 and I are both free")
+    assert call.args["first"] is True
+    call = agent(world, Choice(tool="changes", change="cancelled", week=WEEK + 1)).read("any cancelled classes next week?")
+    assert (call.tool, call.args, call.week) == ("changes", {"change": "cancelled"}, WEEK + 1)
+
+
+@pytest.fixture(scope="module")
+def shared(world):
+    """The department with a course as they often are and the generated one never is: two co-teachers (one of
+    its classes taught by a second teacher), the same for every section that takes it."""
+    data = world.instance.model_dump()
+    first = data["sessions"][0]
+    co = next(s for s in data["sessions"] if s["course"] == first["course"] and s["id"] != first["id"])
+    co["faculty"] = next(f["id"] for f in data["faculty"] if f["id"] not in (first["faculty"], "F-102"))
+    from core.instance import Instance
+
+    return Instance.model_validate(data), first, co
+
+
+def test_co_teachers_are_answered_each_on_their_own(shared):
+    from agents.lookup import WeekTimetable
+    from agents.questions import Answerer
+
+    inst, first, co = shared
+    title = inst.course_titles[first["course"]]
+    asker = next(f.id for f in inst.faculty if f.id not in (first["faculty"], co["faculty"]))  # not one of them ("You")
+    a = ToolAgent(inst, FakeModel(Choice(tool="free_hours", course=title, week=WEEK)), asker, WEEK, today=date(2026, 10, 21))
+    call = a.read(f"when is the {title} teacher free?")
+    assert call.confident and call.args["each"] is True
+    assert set(call.args["teachers"]) == {first["faculty"], co["faculty"]}
+    names = [inst.faculty_by_id[f].name for f in (first["faculty"], co["faculty"])]
+    from web.app import World
+
+    week = WeekTimetable(inst, World(parser_mode="offline", seed_history=False, deadline=60).store, WEEK)
+    reply = Answerer(inst, asker).answer(call, week)
+    assert reply.startswith(f"{title} is taught by {names[0]} and {names[1]}. ")
+    assert all(f"{n} is free on" in reply or f"{n} has no free hours" in reply for n in names), reply  # one sentence each
+
+
+def test_both_teachers_of_a_course_together(shared):
+    inst, first, co = shared
+    title = inst.course_titles[first["course"]]
+    a = ToolAgent(inst, FakeModel(Choice(tool="free_hours", course=title, teachers=["all"], week=WEEK)), "F-102", WEEK,
+                  today=date(2026, 10, 21))
+    call = a.read(f"when are both {title} teachers free?")
+    assert call.confident and set(call.args["teachers"]) >= {first["faculty"], co["faculty"]}
+    assert len(call.args["teachers"]) < len(inst.faculty)  # the course's teachers, not every teacher

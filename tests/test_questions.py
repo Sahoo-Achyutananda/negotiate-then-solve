@@ -310,3 +310,31 @@ def test_a_role_is_said_with_who_holds_it(world, week):
     assert reply.startswith(f"The HOD ({head.name}) is free on") or reply.startswith(f"The HOD ({head.name}) has no")
     who = a.answer(ToolCall("describe", {"teacher": head.id, "as_role": {head.id: "hod"}}, WEEK), week)
     assert who.startswith(f"The HOD is {head.name}, who teaches")
+
+
+def test_changes_of_one_kind_answer_yes_or_no(world):
+    store = Store()  # as test_changes_reply: one class not held in WEEK
+    semester = world.store.current_version()
+    store.publish_version(store.propose_version(dict(semester.assignment), "test").version, "test")
+    gone = WeekTimetable(world.instance, store, WEEK).classes[0]
+    store.publish_version(store.propose_version(dict(semester.assignment), "test", week=WEEK,
+                                                cancelled=[gone.session.id]).version, "test")
+    week = WeekTimetable(world.instance, store, WEEK)
+    a = Answerer(world.instance, person(world, "Dr. Menon"))
+    assert a.answer(ToolCall("changes", {"change": "cancelled"}, WEEK), week).startswith(
+        f"Yes, 1 class is not held in week {WEEK}: ")
+    assert a.answer(ToolCall("changes", {"change": "moved"}, WEEK), week) == \
+        f"No classes are moved in week {WEEK}. (1 other change that week: ask what changed to see it.)"
+    assert a.answer(ToolCall("changes", {"change": "extra"}, WEEK), week).startswith("There are no extra classes")
+
+
+def test_earliest_and_a_course_s_teachers(world, week):
+    me = person(world, "Dr. Menon")
+    a = Answerer(world.instance, me)
+    free = week.free_hours([me])
+    reply = a.answer(ToolCall("free_hours", {"teachers": [me], "first": True}, WEEK), week)
+    assert reply == f"The earliest you are free is {_spans([free[0]])} (week {WEEK})."
+    s = next(x for x in world.instance.sessions if x.faculty != me)  # someone else's course ("You" otherwise)
+    teacher = world.instance.faculty_by_id[s.faculty]
+    reply = a.answer(ToolCall("free_hours", {"teachers": [s.faculty], "via_course": s.course}, WEEK), week)
+    assert reply.startswith(f"{world.instance.course_title(s.course)} is taught by {teacher.name}. {teacher.name} ")
