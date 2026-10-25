@@ -58,6 +58,9 @@ Tools (the fields to fill; leave the others empty):
                 rules ("is it allowed ...?", "how many ... can ...?"), or anything else.
 Rules:
 - Use names exactly as they are listed. "me" stands for the person asking ("I", "my", "we").
+- "all", "each" or "every" teacher (faculty), section or room: write ["all"] in that list, never one or a
+  few of them. "when are all faculty free together?": free_hours, teachers ["all"]; "what courses does each
+  section take?": describe, sections ["all"]; "which teachers teach on Friday?": classes_of, teachers ["all"].
 - A name, room or place the question mentions that is not listed goes in "unknown" (for example
   a teacher not in the list, a student, the auditorium, a seminar hall); then choose the tool you
   would have used.
@@ -80,9 +83,9 @@ class Choice(BaseModel):
     tool: Literal["free_hours", "classes_of", "free_rooms", "who_is_free", "describe", "changes", "unanswerable",
                   "none"]
     reason: Literal["private", "not_in_data"] | None = None
-    teachers: list[str] = Field(default_factory=list, description='as listed, or "me"')
-    sections: list[str] = Field(default_factory=list)
-    rooms: list[str] = Field(default_factory=list)
+    teachers: list[str] = Field(default_factory=list, description='as listed, "me", or ["all"]')
+    sections: list[str] = Field(default_factory=list, description='as listed, "me", or ["all"]')
+    rooms: list[str] = Field(default_factory=list, description='as listed, or ["all"]')
     course: str | None = None
     days: list[str] = Field(default_factory=list, description="Mon, Tue, Wed, Thu, Fri")
     dates: list[str] = Field(default_factory=list, description="calendar dates named, YYYY-MM-DD")
@@ -108,6 +111,11 @@ class GrammarChoice(Choice):
     ``tool`` required it writes the fields it needs, in the order it was trained on, ``week`` among them."""
 
     week: int | None = None
+
+
+def _all(names: list[str]) -> bool:
+    """The model wrote "all" in a list of names: every teacher, section or room."""
+    return any(n.strip().lower() == "all" for n in names)
 
 
 class Client(Protocol):
@@ -221,7 +229,8 @@ class ToolAgent:
         if bad := [e for e in c.equipment if e not in known]:
             raise Problem(f"equipment {bad}: rooms have {', '.join(sorted(known))}")
         teachers, sections = self._people(c)
-        rooms = [self._one(r, Room) for r in c.rooms]
+        rooms = ([r.id for r in self.instance.rooms] if _all(c.rooms) else [self._one(r, Room) for r in c.rooms])
+        everyone = [k for k, v in (("teachers", c.teachers), ("sections", c.sections), ("rooms", c.rooms)) if _all(v)]
         course = self._one(c.course, str) if c.course else None
         days, slots = sorted(c.days, key=cal.days.index), sorted(set(c.hours))
         part = None if slots else c.part  # a time asked about is more exact than "afternoon"
@@ -244,13 +253,20 @@ class ToolAgent:
         elif c.tool == "who_is_free":
             args = {"days": days, "slots": slots, "part": part, "course": course, "sections": c.of == "sections"}
         elif c.tool == "describe":
-            args = self._describe(c, teachers, sections, rooms, course)
+            args = ({"what": everyone[0], "kind": c.kind if everyone[0] == "rooms" else None} if everyone else
+                    self._describe(c, teachers, sections, rooms, course))
         elif c.tool == "changes":
+            # every teacher or section: the whole week's changes, no filter
+            teachers, sections = ([] if "teachers" in everyone else teachers), ([] if "sections" in everyone else sections)
             if len(teachers) > 1 or len(sections) > 1:
                 raise Problem("changes takes at most one teacher or one section")
             args = {"teacher": teachers[0] if teachers else None, "section": sections[0] if sections else None}
         else:  # classes_of
-            if not (teachers or sections or rooms or course):
+            # "which teachers teach on Friday?": every teacher is no filter on teachers (the same for sections, rooms)
+            teachers = [] if "teachers" in everyone else teachers
+            sections = [] if "sections" in everyone else sections
+            rooms = [] if "rooms" in everyone else rooms
+            if not (teachers or sections or rooms or course or everyone):
                 raise Problem("classes_of needs a teacher, a section, a room or a course")
             if len(teachers) > 1 or len(sections) > 1 or len(rooms) > 1:
                 raise Problem("classes_of takes at most one teacher, one section and one room")
@@ -267,8 +283,10 @@ class ToolAgent:
         """Teachers and sections as IDs; "me" is the sender: a teacher, or a class representative's section."""
         rep = self.sender.startswith("ST-")
         me = any(x.lower() == "me" for x in [*c.teachers, *c.sections])  # "me" in either list: the asker
-        teachers = [self._one(t, Faculty) for t in c.teachers if t.lower() != "me"]
-        sections = [self._one(s, Group) for s in c.sections if s.lower() != "me"]
+        teachers = ([f.id for f in self.instance.faculty] if _all(c.teachers) else
+                    [self._one(t, Faculty) for t in c.teachers if t.lower() != "me"])
+        sections = ([g.id for g in self.instance.groups] if _all(c.sections) else
+                    [self._one(s, Group) for s in c.sections if s.lower() != "me"])
         if me and rep and self.sender[3:] not in sections:
             sections.insert(0, self.sender[3:])
         elif me and not rep and self.sender not in teachers:

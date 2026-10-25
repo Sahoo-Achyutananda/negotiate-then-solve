@@ -4,6 +4,7 @@ Gemini (``ToolAgent``) and both together (ROADMAP.md, step 4).
     uv run python -m evaluation.lookup_set                          # the regex only: no API calls
     uv run python -m evaluation.lookup_set --gemini gemini-3.8-flash # also Gemini (cached: reruns are free)
     uv run python -m evaluation.lookup_set --local http://10.1.25.191:8080/v1   # also the nts-lookup-v1 adapter
+    uv run python -m evaluation.lookup_set --local --department 1 --shuffle      # a department it has not seen
 
 ``data/lookup-test-templates.jsonl`` has templates, not questions: *"is {teacher.any} free on {day.any} at
 {time.any}?"* with the expected lookup in the same placeholders, ``{"teachers": ["{teacher}"], ...}``. The
@@ -48,6 +49,43 @@ def with_first_names(instance: Instance) -> Instance:
         title, *rest = f["name"].split()
         if rest and rest[-1] in FIRST_NAMES:
             f["name"] = f"{title} {FIRST_NAMES[rest[-1]]} {rest[-1]}"
+    return Instance.model_validate(data)
+
+
+def department(base: Instance, seed: int | None = None, shuffle: bool = False) -> Instance:
+    """The department to ask about (ROADMAP step 6: does the model read the question, or remember the department
+    it was trained on?). ``seed``: one made by ``core.generator`` with the same numbers of teachers, sections,
+    courses and rooms as ``base`` (other teacher-course pairs, section sizes, rooms with labs); None: ``base``.
+    ``shuffle``: names, the HOD and course titles moved around (the generator always gives F-101 the name
+    "Dr. Rao" and the HOD, and Section 1 the same courses), so a model that learned who is who is caught.
+    The expected lookups are filled from whichever department this is, so they are right for it."""
+    if seed is not None:
+        from core.generator import generate_department
+
+        courses = len(base.course_titles) // max(len(base.groups), 1)
+        made = generate_department(
+            seed, n_faculty=len(base.faculty), n_groups=len(base.groups), courses_per_group=max(courses, 1),
+            n_lecture_rooms=sum(r.type.value == "lecture" for r in base.rooms),
+            n_labs=sum(r.type.value == "lab" for r in base.rooms), calendar=base.calendar)
+        pairs = lambda i: {(s.course, s.faculty) for s in i.sessions}  # noqa: E731
+        if pairs(made) == pairs(base) and [g.size for g in made.groups] == [g.size for g in base.groups]:
+            # the app's own department is a generated one (seed 1 at the demo's size): that seed asks it again
+            raise ValueError(f"seed {seed} makes the same department as {base.name!r}; choose another seed")
+        base = made.model_copy(update={"name": f"{made.name} (like {base.name})"})
+    if not shuffle:
+        return base
+    rng = random.Random(f"shuffle-{seed}")
+    data = base.model_dump()
+    names = [f["name"] for f in data["faculty"]]
+    rng.shuffle(names)
+    roles = [f["role"] for f in data["faculty"]]
+    rng.shuffle(roles)  # the HOD lands on someone else
+    for f, name, role in zip(data["faculty"], names, roles, strict=True):
+        f["name"], f["role"] = name, role
+    titles = list(data["course_titles"].values())
+    rng.shuffle(titles)
+    data["course_titles"] = dict(zip(data["course_titles"], titles, strict=True))
+    data["name"] = f"{base.name}, shuffled"
     return Instance.model_validate(data)
 
 
@@ -307,20 +345,30 @@ def _norm(args: dict) -> dict:
             for k, v in args.items() if v not in (None, [], False)}
 
 
-def _with_retries(read, question: str, tries: int = 5, wait: float = 15.0):
-    """A dropped connection is tried again after a pause; a question that keeps failing is marked, not fatal."""
+class Unreachable(Exception):
+    """The model could not be reached for a while: the run stops, to be resumed (``--resume``), rather than
+    count the questions it could not ask as wrong."""
+
+
+def _with_retries(read, question: str, tries: int = 10, wait: float = 30.0):
+    """A dropped connection (Gemini's or the local server's) is tried again after a pause; still down after
+    ``tries``, the run stops (``Unreachable``)."""
     import time
 
     import httpx
 
+    from language.llm import LLMError
+
     for k in range(tries):
         try:
             return read(question)
-        except (httpx.TransportError, ConnectionError) as e:
-            print(f"  network error ({type(e).__name__}), trying again in {wait:.0f} s", flush=True)
+        except (httpx.TransportError, ConnectionError, LLMError) as e:
+            if isinstance(e, LLMError) and "not reachable" not in str(e) and "timed out" not in str(e):
+                raise  # a real error from the model, not the network
+            print(f"  network error ({type(e).__name__}), trying again in {wait:.0f} s ({k + 1}/{tries})", flush=True)
             if k < tries - 1:
                 time.sleep(wait)
-    return ToolCall("unclear", confident=False, note="(skipped: the network kept failing)")
+    raise Unreachable(f"the model was unreachable {tries} times in a row")
 
 
 def _show(call: ToolCall | None) -> str:
@@ -341,12 +389,18 @@ def main() -> None:
     ap.add_argument("--rpd", type=int, default=None, help="Gemini calls a day (a paid key: e.g. 5000)")
     ap.add_argument("--out", type=Path, default=Path("runs/lookup-set.jsonl"), help="every question and reading")
     ap.add_argument("--misses", action="store_true", help="print every miss")
+    ap.add_argument("--department", type=int, metavar="SEED", default=None,
+                    help="ask about a generated department of the same size (not the app's; ROADMAP step 6)")
+    ap.add_argument("--shuffle", action="store_true", help="move names, the HOD and course titles around")
+    ap.add_argument("--resume", action="store_true",
+                    help="keep the questions already in --out and ask only the rest (after a dropped connection)")
     a = ap.parse_args()
 
     from web.app import World
 
     w = World(parser_mode="offline", seed_history=False, deadline=60)
-    instance = with_first_names(w.instance)
+    instance = with_first_names(department(w.instance, a.department, a.shuffle))
+    print("department:", instance.name)
     rows = [json.loads(x) for x in TEMPLATES.read_text(encoding="utf-8").splitlines() if x.strip()]
     questions = fill_all(instance, rows, a.fills, a.seed)
     client, model = None, None
@@ -367,15 +421,29 @@ def main() -> None:
     readers = ["regex"] + ([model, "both"] if client else [])
     score: dict[str, dict[str, list[int]]] = {r: {} for r in readers}
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    with a.out.open("w", encoding="utf-8") as out:
+    done: set[tuple[str, str]] = set()
+    if a.resume and a.out.exists():  # the questions already asked count as they were scored
+        for line in a.out.read_text(encoding="utf-8").splitlines():
+            if line.strip() and all(f"{r}_right" in (row := json.loads(line)) for r in readers):
+                done.add((row["id"], row["question"]))
+                for r in readers:
+                    score[r].setdefault(row["group"], []).append(row[f"{r}_right"])
+        print(f"resuming: {len(done)} questions already asked")
+    with a.out.open("a" if a.resume else "w", encoding="utf-8") as out:
         for f in questions:
+            if (f.id, f.question) in done:
+                continue
             got = {"regex": QuestionReader(instance, f.asker, WEEK, today=NOW.date(), now=NOW,
                                             semester_start=SEMESTER_START).read(f.question)}
             trace = []
             if client:
                 agent = ToolAgent(instance, client, f.asker, WEEK, today=NOW.date(), now=NOW,
                                   semester_start=SEMESTER_START)
-                got[model] = _with_retries(agent.read, f.question)
+                try:
+                    got[model] = _with_retries(agent.read, f.question)
+                except Unreachable as e:
+                    raise SystemExit(f"\nstopped: {e}. {sum(len(v) for v in score['regex'].values())} questions are in "
+                                     f"{a.out}; run the same command with --resume to go on") from None
                 trace = agent.trace
                 got["both"] = got["regex"] if got["regex"] is not None or REQUEST.search(f.question) else got[model]
             for r in readers:
@@ -388,6 +456,7 @@ def main() -> None:
                                   "want": {"tool": f.tool, "args": f.args, "week": f.week},
                                   **{r: _show(got[r]) for r in readers}, "tries": trace,
                                   **{f"{r}_right": right(f, got[r]) for r in readers}}) + "\n")
+            out.flush()  # each question kept at once, so a run cut short can be resumed
 
     groups = sorted({g for s in score.values() for g in s})
     print(f"\n{len(questions)} questions from {len(rows)} templates\n")

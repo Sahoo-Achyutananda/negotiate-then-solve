@@ -177,3 +177,25 @@ def test_free_rooms_and_classes_of_take_the_regex_shapes(world):
     assert call.args == {"kind": "lab", "equipment": ["gpu"], "days": ["Tue"], "slots": [5, 6]} and call.week == WEEK + 1
     call = agent(world, Choice(tool="classes_of", course="ML", week=WEEK)).read("when's ML?")
     assert call.args == {"course": next(c for c, t in world.instance.course_titles.items() if t == "Machine Learning")}
+
+
+# -- "all", "each", "every": the model writes ["all"], the code puts in every teacher, section or room ---------
+
+
+def test_all_teachers_free_together_is_every_teacher(world):
+    call = agent(world, Choice(tool="free_hours", teachers=["all"], week=WEEK)).read("when are all faculty members free together?")
+    assert call.tool == "free_hours" and call.args["teachers"] == [f.id for f in world.instance.faculty]
+
+
+def test_each_section_is_the_list_of_sections(world):
+    call = agent(world, Choice(tool="describe", sections=["all"], week=WEEK)).read("what courses does each section take?")
+    assert (call.tool, call.args) == ("describe", {"what": "sections"})
+    call = agent(world, Choice(tool="describe", rooms=["All"], kind="lab", week=WEEK)).read("list every lab")
+    assert call.args == {"what": "rooms", "kind": "lab"}
+
+
+def test_every_teacher_is_no_filter_in_classes_and_changes(world):
+    call = agent(world, Choice(tool="classes_of", teachers=["all"], days=["Fri"], week=WEEK)).read("which teachers teach on Friday?")
+    assert (call.tool, call.args) == ("classes_of", {"days": ["Fri"]})
+    call = agent(world, Choice(tool="changes", sections=["all"], week=WEEK)).read("what changed for every section?")
+    assert (call.tool, call.args) == ("changes", {})

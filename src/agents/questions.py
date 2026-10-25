@@ -408,8 +408,11 @@ class Answerer:
             kind = a.get("kind")
             name = {"lab": "Labs", "lecture": "Lecture rooms"}.get(kind, "Rooms")
             return f"{name}: " + "; ".join(f"{r.name} ({self._room_facts(r)})" for r in d.rooms(kind)) + "."
-        if what == "sections":
-            return "Sections: " + "; ".join(f"{g.name} ({g.size} students)" for g in d.sections()) + "."
+        if what == "sections":  # each with what it studies, as the teachers' list gives what they teach
+            return "Sections: " + "; ".join(
+                f"{g.name} ({g.size} students): "
+                + _listed(list(dict.fromkeys(i.course_title(s.course) for s in i.sessions if g.id in s.groups)))
+                for g in d.sections()) + "."
         if what == "teachers":
             return "Teachers: " + "; ".join(
                 f"{f.name} ({_listed([i.course_title(c) for c in d.courses_of(f.id)]) or 'no classes'})"
@@ -524,7 +527,10 @@ class Answerer:
             return _cap(f"{who}'s{' ' + course if course else ''} classes in {when}: ") + listed + "."
         if a.get("room"):
             return f"{course + ' c' if course else 'C'}lasses in {who} in {when}: " + listed + "."
-        return f"{course} in {when}: " + listed + "."  # a course asked about, nobody named: everyone's classes of it
+        if course:
+            return f"{course} in {when}: " + listed + "."  # a course asked about, nobody named: everyone's classes of it
+        on = f" on {_listed([FULL_DAY[d] for d in a['days']])}" if a.get("days") else ""
+        return f"Classes{on} in {when}: " + listed + "."  # every teacher ("which teachers teach on Friday?")
 
     def _one(self, c: ScheduledClass, teacher: bool = False) -> str:
         s, p = c.session, c.placement
@@ -537,7 +543,17 @@ class Answerer:
         return [*a.get("teachers", []), *a.get("sections", []), *a.get("rooms", [])]
 
     def _who(self, a: dict) -> tuple[str, bool]:
-        """ "you", "you and Dr. Iyer", "Section 4", "Lab 2": and whether it is plural ("are", "have")."""
+        """ "you", "you and Dr. Iyer", "Section 4", "Lab 2", "all teachers": and whether it is plural ("are",
+        "have"). Every teacher, section or room of the department is said as "all teachers" (not the list)."""
+        i = self.instance
+        every = [w for w, have, ids in (("teachers", a.get("teachers", []), [f.id for f in i.faculty]),
+                                        ("sections", a.get("sections", []), [g.id for g in i.groups]),
+                                        ("rooms", a.get("rooms", []), [r.id for r in i.rooms]))
+                 if len(ids) > 1 and set(have) >= set(ids)]
+        if every:
+            rest = {k: [] if k in every else a.get(k, []) for k in ("teachers", "sections", "rooms")}
+            others, _ = self._who(rest) if any(rest.values()) else ("", False)
+            return _listed([f"all {w}" for w in every] + ([others] if others else [])), True
         names = []
         for t in a.get("teachers", []):
             names.append("you" if t == self.sender else self.instance.faculty_by_id[t].name)

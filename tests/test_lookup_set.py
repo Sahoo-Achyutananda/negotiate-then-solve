@@ -129,3 +129,51 @@ def test_regex_score_on_the_test_set(instance, rows):
     print(f"\nregex on the test set: {ok}/{len(questions)}; requests or rule questions read as lookups: "
           f"{len(requests_as_lookups)}")
     assert ok > len(questions) // 2
+
+
+# -- other departments (ROADMAP step 6): does a reader read, or remember the department? ---------------------
+
+
+def test_a_generated_department_has_the_same_size_but_other_pairs():
+    from evaluation.lookup_set import department
+
+    base = World(parser_mode="offline", seed_history=False, deadline=60).instance
+    other = department(base, seed=7)
+    assert (len(other.faculty), len(other.groups), len(other.rooms)) == (len(base.faculty), len(base.groups), len(base.rooms))
+    pairs = lambda i: {(s.course, s.faculty) for s in i.sessions}  # noqa: E731
+    assert pairs(other) != pairs(base)
+
+
+def test_shuffling_moves_the_names_the_hod_and_the_titles():
+    from evaluation.lookup_set import department
+
+    base = World(parser_mode="offline", seed_history=False, deadline=60).instance
+    shuffled = department(base, shuffle=True)
+    hod = lambda i: next(f.id for f in i.faculty if f.role.value == "hod")  # noqa: E731
+    assert sorted(f.name for f in shuffled.faculty) == sorted(f.name for f in base.faculty)
+    assert [f.name for f in shuffled.faculty] != [f.name for f in base.faculty]
+    assert hod(shuffled) != hod(base) or [f.name for f in shuffled.faculty][0] != base.faculty[0].name
+    assert sorted(shuffled.course_titles.values()) == sorted(base.course_titles.values())
+    assert shuffled.course_titles != base.course_titles
+
+
+def test_the_questions_are_labelled_for_the_department_asked_about(rows):
+    from evaluation.lookup_set import department
+
+    base = World(parser_mode="offline", seed_history=False, deadline=60).instance
+    other = with_first_names(department(base, seed=3, shuffle=True))
+    questions = fill_all(other, rows, fills=1)
+    ids = {f.id for f in other.faculty} | {g.id for g in other.groups} | {r.id for r in other.rooms} | set(other.course_titles)
+    named = [v for f in questions for k, v in f.args.items() if k in ("teachers", "sections", "rooms") and isinstance(v, list)]
+    assert named and all(x in ids for v in named for x in v)
+    # the regex reads names from the department, so it scores about the same on a department it was never tuned on
+    reader = lambda f: QuestionReader(other, f.asker, WEEK, today=NOW.date(), now=NOW, semester_start=SEMESTER_START)  # noqa: E731
+    assert sum(right(f, reader(f).read(f.question)) for f in questions) > len(questions) // 2
+
+
+def test_a_seed_that_makes_the_apps_own_department_is_refused():
+    from evaluation.lookup_set import department
+
+    base = World(parser_mode="offline", seed_history=False, deadline=60).instance  # the demo: seed 1 at this size
+    with pytest.raises(ValueError, match="same department"):
+        department(base, seed=1)

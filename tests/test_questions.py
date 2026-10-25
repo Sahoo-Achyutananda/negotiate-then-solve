@@ -279,3 +279,25 @@ def test_changes_reply(world):
         f"Changes in week {WEEK}: {what} on {FULL_DAY[p.day]} {hour(p.slot)} is not held."
     assert a.answer(ToolCall("changes", {}, WEEK + 1), WeekTimetable(world.instance, store, WEEK + 1)) == \
         f"No changes in week {WEEK + 1}: the timetable is as planned."
+
+
+def test_all_of_them_is_said_as_all(world, week):
+    a = Answerer(world.instance, person(world, "Dr. Menon"))
+    everyone = [f.id for f in world.instance.faculty]
+    reply = a.answer(ToolCall("free_hours", {"teachers": everyone}, WEEK), week)
+    assert reply.startswith("All teachers are free on") or reply.startswith("All teachers have no free hours")
+    assert "Dr. Iyer" not in reply
+    with_one = a.answer(ToolCall("free_hours", {"teachers": everyone, "sections": [world.instance.groups[0].id]}, WEEK), week)
+    assert with_one.startswith(f"All teachers and {world.instance.groups[0].name} ")
+
+
+def test_the_sections_list_says_what_each_studies(world, week):
+    reply = Answerer(world.instance, person(world, "Dr. Menon")).answer(ToolCall("describe", {"what": "sections"}, WEEK), week)
+    for g in world.instance.groups:
+        course = next(world.instance.course_title(s.course) for s in world.instance.sessions if g.id in s.groups)
+        assert f"{g.name} ({g.size} students): " in reply and course in reply
+
+
+def test_classes_with_nobody_named_are_everyones(world, week):
+    reply = Answerer(world.instance, person(world, "Dr. Menon")).answer(ToolCall("classes_of", {"days": ["Fri"]}, WEEK), week)
+    assert reply.startswith(f"Classes on Friday in week {WEEK}: ") and "Dr." in reply  # each with its teacher
