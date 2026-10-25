@@ -11,7 +11,7 @@ export interface Persona {
   views?: View[];
 }
 
-export type View = "home" | "requests" | "timetable" | "handbook" | "how" | "new" | "inbox" | "approvals" | "history" | "documents" | "semester" | "prefs" | "clubs" | "fairness" | "graph" | "health" | "experiments" | "study";
+export type View = "home" | "requests" | "timetable" | "handbook" | "how" | "new" | "inbox" | "approvals" | "history" | "documents" | "semester" | "prefs" | "clubs" | "fairness" | "graph" | "health" | "experiments" | "study" | "settings";
 
 export type Status =
   | "received"

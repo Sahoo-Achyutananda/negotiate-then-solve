@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS seen (person TEXT NOT NULL, item TEXT NOT NULL, n INT
 CREATE TABLE IF NOT EXISTS chat (n INTEGER PRIMARY KEY AUTOINCREMENT, person TEXT NOT NULL, at TEXT NOT NULL,
                                  role TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS hidden (person TEXT NOT NULL, item TEXT NOT NULL, PRIMARY KEY (person, item));
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
@@ -297,6 +298,15 @@ class Store:
 
     def hidden(self, person: str) -> set[str]:
         return {i for (i,) in self._exec("SELECT item FROM hidden WHERE person=?", (person,))}
+
+    def setting(self, key: str, default=None):
+        """A value the coordinator set (``set_setting``), or ``default``."""
+        row = self._exec("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
+
+    def set_setting(self, key: str, value) -> None:
+        self._exec("INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                   (key, json.dumps(value)))
 
     def clear_chat(self, person: str) -> int:
         """Empties ``person``'s chat (their requests stay, in the Requests list). Returns how many went."""

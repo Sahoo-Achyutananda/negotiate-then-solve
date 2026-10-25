@@ -550,11 +550,23 @@ class RequestBody(BaseModel):
 
 
 class FormRequestBody(BaseModel):
-    """A request made with clicks: the request in words (what people read) and its one intent (what the
-    pipeline acts on), a cancellation, a move or a swap of one of the sender's classes."""
+    """A request made with clicks: the request in words (what people read) and what the pipeline acts on:
+    ``intent``, a cancellation, a move or a swap of one of the sender's classes; or ``intents``, several classes
+    of a range of dates (the range builder): cancellations, or the sender away at their classes' times
+    (``unavailable``, all in one week: one week is repaired per request) so the solver finds new times.
+    ``makeup``: hold make-up classes (a range moved is always made up)."""
 
     text: str
-    intent: dict
+    intent: dict | None = None
+    intents: list[dict] | None = None
+    makeup: bool = False
+
+
+MAX_RANGE_WEEKS = 4  # the longest range of dates a request may cover, until the coordinator sets another
+
+
+class SettingsBody(BaseModel):
+    max_range_weeks: int = Field(ge=1, le=52)
 
 
 class ReplyBody(BaseModel):
@@ -941,26 +953,46 @@ def create_web_app(world: World | None = None, *, worlds_dir: Path | None = None
         """A request made with clicks. Its intent is taken as given, so nothing is left to a parser:
         it is checked here (one of the sender's own classes) and resolved like a parsed one."""
         w = W()
+        given = body.intents if body.intents is not None else [body.intent] if body.intent is not None else []
+        if not given:
+            raise HTTPException(422, "nothing to request")
         try:
-            out = IntentOutput(action="compile", intents=[body.intent])
+            out = IntentOutput(action="compile", intents=given)
         except ValidationError as e:
             raise HTTPException(422, f"not a request this form can make: {e.errors()[0]['msg']}") from None
-        intent = out.intents[0]
-        if intent.kind not in ("cancel", "move", "swap"):
-            raise HTTPException(422, "the form makes cancellations, moves and swaps")
+        kinds = {i.kind for i in out.intents}
+        if len(out.intents) == 1 and kinds <= {"cancel", "move", "swap"}:
+            pass
+        elif len(kinds) != 1 or not kinds <= {"cancel", "unavailable"}:
+            raise HTTPException(422, "several classes are cancelled together, or moved together (unavailable)")
         now = w.orch.current_week() if w.orch.current_week else None
+        weeks: set[int] = set()
+        for intent in out.intents:
+            try:
+                asked = period_weeks(w.instance, intent.period, now) or []
+            except Unresolved as e:
+                raise HTTPException(422, e.question) from None
+            if not asked and intent.kind == "unavailable":
+                raise HTTPException(422, "say which week you are away")
+            if now is not None and asked and asked[0] < now:
+                raise HTTPException(422, f"Week {asked[0]} has passed; it is week {now} now.")
+            weeks |= set(asked)
+            if intent.kind == "unavailable":
+                if intent.who is not None:
+                    raise HTTPException(403, "only you can be away in your request")
+                continue
+            mine = intent.mine if intent.kind == "swap" else intent.which
+            session = w.instance.session_by_id.get(mine.session or "")
+            if session is None or session.faculty != u["id"]:
+                raise HTTPException(403, "only your own classes can be cancelled, moved or swapped")
+        if len(out.intents) > 1:
+            longest = w.store.setting("max_range_weeks", MAX_RANGE_WEEKS)
+            if weeks and max(weeks) - min(weeks) + 1 > longest:
+                raise HTTPException(422, f"A request can cover at most {longest} week{'s' if longest != 1 else ''}.")
+            if kinds == {"unavailable"} and len(weeks) > 1:
+                raise HTTPException(422, "classes are moved one week per request")
         try:
-            asked = period_weeks(w.instance, intent.period, now) or []
-        except Unresolved as e:
-            raise HTTPException(422, e.question) from None
-        if now is not None and asked and asked[0] < now:
-            raise HTTPException(422, f"Week {asked[0]} has passed; it is week {now} now.")
-        mine = intent.mine if intent.kind == "swap" else intent.which
-        session = w.instance.session_by_id.get(mine.session or "")
-        if session is None or session.faculty != u["id"]:
-            raise HTTPException(403, "only your own classes can be cancelled, moved or swapped")
-        try:
-            r = w.intake.from_portal(u["id"], body.text)
+            r = w.intake.from_portal(u["id"], body.text, makeup=body.makeup or kinds == {"unavailable"})
         except UnknownSender:
             raise HTTPException(403, "unknown user") from None
         if r is None:
@@ -1195,6 +1227,16 @@ def create_web_app(world: World | None = None, *, worlds_dir: Path | None = None
         except ValueError as e:
             raise HTTPException(409, str(e)) from None
         return _inbox_item(w, item)
+
+    @app.get("/api/settings")
+    def settings(u: dict = Depends(user)) -> dict:
+        """What the coordinator set for everyone: the longest range of dates a request may cover."""
+        return {"max_range_weeks": W().store.setting("max_range_weeks", MAX_RANGE_WEEKS)}
+
+    @app.post("/api/settings")
+    def set_settings(body: SettingsBody, u: dict = Depends(view("settings"))) -> dict:
+        W().store.set_setting("max_range_weeks", body.max_range_weeks)
+        return {"max_range_weeks": body.max_range_weeks}
 
     @app.get("/api/autopilot")
     def autopilot(u: dict = Depends(user)) -> dict:

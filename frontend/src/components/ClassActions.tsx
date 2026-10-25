@@ -65,7 +65,7 @@ export function sentence(d: Draft, inst: InstanceView, week: number): string {
 }
 
 const FIRST_HOUR = 9; // slot 0 starts at 9:00 (language.corpus.FIRST_SLOT_HOUR)
-const clock = (slot: number) => `${String(FIRST_HOUR + slot).padStart(2, "0")}:00`;
+export const clock = (slot: number) => `${String(FIRST_HOUR + slot).padStart(2, "0")}:00`;
 
 /** The request as the pipeline takes it: one intent of ``language.intents`` (cancel, move or swap). */
 export function intent(d: Draft, week: number): Record<string, unknown> {

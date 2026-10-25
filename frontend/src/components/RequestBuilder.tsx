@@ -8,6 +8,7 @@ import { dateOf } from "../lib/slots";
 import { dayPassed, freeSlotsFor, startWeek, swappableWith } from "../lib/scheduling";
 import type { TimetableEntry } from "../lib/types";
 import { intent, sentence, type ActionKind, type Draft, type WeekChoice } from "./ClassActions";
+import { RangeBuilder } from "./RangeBuilder";
 import { Button, Skeleton } from "./ui";
 
 /** "New request" from the Requests tab (wireframe of 24 Oct, "point scheduling"): a week, a day (or all), one of
@@ -15,7 +16,8 @@ import { Button, Skeleton } from "./ui";
  * - Reschedule: a free slot in that week for the class, and which weeks it applies to;
  * - Swap: a colleague's class it can actually be swapped with that week;
  * - Cancel: which weeks.
- * Typed text is sent as a request with the class named in it; either way it also appears in the chat. */
+ * Typed text is sent as a request with the class named in it; either way it also appears in the chat.
+ * A teacher can instead pick "A range of dates" (components/RangeBuilder): several classes cancelled or moved. */
 export function RequestBuilder({ onClose, onSent }: { onClose: () => void; onSent: (id: string) => void }) {
   const { user } = useAuth();
   const teaching = ["faculty", "guest_faculty", "hod"].includes(user?.role ?? "");
@@ -37,6 +39,7 @@ export function RequestBuilder({ onClose, onSent }: { onClose: () => void; onSen
   const [when, setWhen] = useState<WeekChoice>({ mode: "this", weeks: [] });
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [range, setRange] = useState(false); // "A range of dates" instead of one class
 
   const mine = useMemo(
     () => all.filter((e) => (teaching ? e.faculty === user?.id : group ? e.groups.includes(group) : false)),
@@ -108,6 +111,17 @@ export function RequestBuilder({ onClose, onSent }: { onClose: () => void; onSen
         </div>
 
         <div className="space-y-4 p-4">
+          {teaching && (
+            <div className="inline-flex rounded-lg border border-line p-0.5">
+              {([[false, "One class"], [true, "A range of dates"]] as const).map(([on, label]) => (
+                <button key={label} onClick={() => setRange(on)}
+                        className={clsx("rounded-md px-3 py-1 text-[12.5px]", range === on ? "bg-panel-2 font-medium text-ink" : "text-ink-3 hover:text-ink")}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {range ? (inst && cal ? <RangeBuilder inst={inst} cal={cal} onSent={onSent} /> : <Skeleton className="h-40 w-full" />) : (<>
           {/* week → day → class */}
           <Row label="Week">
             {cal ? cal.weeks.map((w) => (
@@ -222,6 +236,7 @@ export function RequestBuilder({ onClose, onSent }: { onClose: () => void; onSen
             </div>
           )}
           {error && <p className="text-[12.5px] text-bad">{error}</p>}
+          </>)}
         </div>
       </div>
     </div>

@@ -134,6 +134,11 @@ export const api = {
   submit: (text: string, makeup = false) => post<{ id: string }>("/requests", { text, makeup }),
   /** A request made with clicks: ``text`` is what people read, ``intent`` what the pipeline acts on (no parser). */
   submitForm: (text: string, intent: Record<string, unknown>) => post<{ id: string }>("/requests/form", { text, intent }),
+  /** several classes of a range of dates: cancelled together, or moved (the sender away then, one week per request) */
+  submitRange: (text: string, intents: Record<string, unknown>[], makeup = false) =>
+    post<{ id: string }>("/requests/form", { text, intents, makeup }),
+  settings: () => call<{ max_range_weeks: number }>("/settings"),
+  setSettings: (max_range_weeks: number) => post<{ max_range_weeks: number }>("/settings", { max_range_weeks }),
   clarify: (id: string, text: string) => post<{ id: string }>(`/cases/${id}/clarify`, { text }),
   cases: (scope: "mine" | "all") => call<CaseSummary[]>(`/cases?scope=${scope}`),
   case: (id: string) => call<CaseDetail>(`/cases/${id}`),

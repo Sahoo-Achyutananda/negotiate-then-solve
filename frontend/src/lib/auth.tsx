@@ -39,6 +39,7 @@ const FALLBACK_VIEWS: Record<View, Role[]> = {
   health: ["coordinator"],
   experiments: ["coordinator"],
   study: ["coordinator"],
+  settings: ["coordinator"],
 };
 
 const AuthContext = createContext<Auth | null>(null);

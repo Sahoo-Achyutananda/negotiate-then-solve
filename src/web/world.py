@@ -88,6 +88,7 @@ VIEWS: dict[str, set[str]] = {
     "approvals": {"coordinator"},
     "history": {"coordinator"},  # timetable versions, proposals and rollback; everyone else sees the latest published
     "documents": {"coordinator"},  # adding and removing policy documents
+    "settings": {"coordinator"},  # what applies to everyone's requests (the longest range of dates)
     "semester": {"coordinator"},  # building the semester timetable from the course offerings
     "prefs": {"coordinator", "hod", "faculty", "guest_faculty", "student"},  # semester preferences
     "clubs": {"coordinator", "student"},  # evening club activities

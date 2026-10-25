@@ -21,6 +21,7 @@ const Fairness = lazy(() => import("./pages/Fairness"));
 const Graph = lazy(() => import("./pages/Graph"));
 const Policy = lazy(() => import("./pages/Policy"));
 const PolicyDocuments = lazy(() => import("./pages/PolicyDocuments"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
 const SemesterBuild = lazy(() => import("./pages/SemesterBuild"));
 const SemesterPreferences = lazy(() => import("./pages/SemesterPreferences"));
 const Clubs = lazy(() => import("./pages/Clubs"));
@@ -100,6 +101,7 @@ function Routed() {
           <Route path="/fairness" element={<Guard view="fairness"><Fairness /></Guard>} />
           <Route path="/policy" element={<Policy />} />
           <Route path="/documents" element={<Guard view="documents"><PolicyDocuments /></Guard>} />
+          <Route path="/settings" element={<Guard view="settings"><SettingsPage /></Guard>} />
           <Route path="/semester" element={<Guard view="semester"><SemesterBuild /></Guard>} />
           <Route path="/preferences" element={<Guard view="prefs"><SemesterPreferences /></Guard>} />
           <Route path="/clubs" element={<Guard view="clubs"><Clubs /></Guard>} />

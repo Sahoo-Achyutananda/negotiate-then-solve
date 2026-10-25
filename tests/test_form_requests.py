@@ -108,3 +108,58 @@ def test_form_refuses_a_week_that_has_passed(client):
         r = c.post("/api/requests/form", headers=as_("F-101"),
                    json={"text": "x", "intent": {"kind": "cancel", "which": {"session": e["session"]}, "period": {"weeks": [week - 1]}}})
         assert r.status_code == 422 and "has passed" in r.json()["detail"]
+
+
+# -- a range of dates (the range builder): several classes in one request ------------------------------------
+
+
+def own_classes(c, person):
+    """The person's classes in the weeks from now, from the calendar: (week, class) pairs."""
+    cal = c.get("/api/calendar", headers=as_(person)).json()
+    now = cal["current_week"]
+    return now, [(w["week"], x) for w in cal["weeks"] if w["week"] >= now for x in w["classes"] if not x["cancelled"]]
+
+
+def test_several_classes_are_cancelled_in_one_request(client):
+    c, world = client
+    now, classes = own_classes(c, "F-103")
+    picked = [x for x in classes if x[0] in (now, now + 1)][:3]
+    intents = [{"kind": "cancel", "which": {"session": x["session"]}, "period": {"weeks": [w]}} for w, x in picked]
+    rid = c.post("/api/requests/form", headers=as_("F-103"),
+                 json={"text": "Please cancel these classes.", "intents": intents, "makeup": True}).json()["id"]
+    d = wait_for(c, rid, DONE)
+    assert d["route"].startswith("form+intents") and d["status"] == "forwarded"
+    assert len(world.orch.cases[rid].compiled.cancels) == len(picked)
+    assert world.store.request(rid).makeup is True
+
+
+def test_classes_of_one_week_are_moved_with_the_sender_away_then(client):
+    c, world = client
+    now, classes = own_classes(c, "F-105")
+    picked = [x for w, x in classes if w == now][:2]
+    intents = [{"kind": "unavailable", "time": {"days": [x["day"]], "at": [f"{9 + x['slot']:02d}:00"]},
+                "period": {"weeks": [now]}} for x in picked]
+    rid = c.post("/api/requests/form", headers=as_("F-105"),
+                 json={"text": "I am away; please move these classes.", "intents": intents}).json()["id"]
+    d = wait_for(c, rid, DONE)
+    assert d["route"].startswith("form+intents") and d["status"] not in ("clarification_requested", "refused"), d["reply"]
+    assert world.store.request(rid).makeup is True  # moved, not cancelled
+
+
+def test_a_range_is_checked(client):
+    c, world = client
+    now, classes = own_classes(c, "F-106")
+    one, other = next(x for w, x in classes if w == now), next(x for w, x in classes if w == now + 1)
+    away = lambda x, w: {"kind": "unavailable", "time": {"days": [x["day"]]}, "period": {"weeks": [w]}}  # noqa: E731
+    post = lambda intents: c.post("/api/requests/form", headers=as_("F-106"), json={"text": "x", "intents": intents})  # noqa: E731
+    assert post([away(one, now), away(other, now + 1)]).status_code == 422  # moved one week per request
+    cancel = lambda x, w: {"kind": "cancel", "which": {"session": x["session"]}, "period": {"weeks": [w]}}  # noqa: E731
+    assert post([cancel(one, now), away(other, now)]).status_code == 422  # cancelled or moved, not both
+    assert c.post("/api/settings", json={"max_range_weeks": 1}, headers=as_("F-106")).status_code == 403
+    assert c.post("/api/settings", json={"max_range_weeks": 1}, headers=as_(COORDINATOR)).status_code == 200
+    try:
+        assert c.get("/api/settings", headers=as_("F-106")).json() == {"max_range_weeks": 1}
+        r = post([cancel(one, now), cancel(other, now + 1)])
+        assert r.status_code == 422 and "at most 1 week." in r.json()["detail"]
+    finally:
+        world.store.set_setting("max_range_weeks", 4)
