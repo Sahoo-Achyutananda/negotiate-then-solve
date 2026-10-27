@@ -31,7 +31,8 @@ from pathlib import Path
 
 from .llm import LLMError
 
-TASKS = ("compile", "policy", "reply", "explain", "lookup")  # lookup: agents.tool_agent (timetable questions)
+TASKS = ("compile", "policy", "reply", "explain", "lookup", "memory")  # lookup: agents.tool_agent (timetable
+# questions); memory: agents.memory (a follow-up made to stand on its own)
 
 
 @dataclass

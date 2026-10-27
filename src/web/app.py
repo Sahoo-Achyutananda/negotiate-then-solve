@@ -39,6 +39,7 @@ from agents.documents import SUFFIXES, ingest
 from agents.explainer import TIER_NAME, describe, placement_text, session_name
 from agents.ledger import ConcessionLedger
 from agents.lookup import WeekTimetable
+from agents.memory import turns_of
 from agents.negotiation import Message, Reply
 from agents.policy import RETRIEVERS, Rule, make_retriever, tokens
 from agents.priority import JUSTIFICATION, ROLE_AUTHORITY, Weights
@@ -865,24 +866,36 @@ def create_web_app(world: World | None = None, *, worlds_dir: Path | None = None
         - a greeting or thanks → what the chat can do (``kind: other``);
         - anything else → "send this as a request?" (``kind: confirm``): nothing is sent until the person
           confirms (``POST /api/chat/confirm``).
+        First, a follow-up ("and Friday?", "move my DS lecture there") is made to stand on its own from the last
+        messages of today (agents.memory): what it was read as is kept with the person's message (``read_as``);
+        when it leans on something the chat doesn't have, the reply asks what they mean.
         Returns the new messages: the person's, then the reply."""
         w = W()
         text, me = body.text.strip(), u["id"]
         if not text:
             raise HTTPException(422, "write a message first")
-        call, reader = w.read_question(text, me)
-        if call is not None:
-            reply = ("lookup", _lookup_answer(w, call, me, reader))
-        elif (rule := w.answer_rule(text, me)) is not None:
+        chat = w.store.chat(me)
+        follow = w.followup(text, me, turns_of(chat, today=date.today()))
+        read = follow.text if follow and follow.changed else text
+        mine = {"text": text} | ({"read_as": read} if read != text else {})
+        last = next((m for m in reversed(chat) if m["role"] == "assistant"), None)
+        if (follow and follow.changed and last and last["kind"] == "confirm" and not last.get("answered")
+                and read.strip() == last["text"].strip()):  # "yes" to "send this as a request?": it is sent
+            w.store.update_chat(me, last["n"], {"answered": "request"})
+            return [w.store.add_chat(me, "you", "text", mine), _send_request(w, me, last)]
+        if follow and follow.ask:
+            reply = ("other", {"text": follow.ask})
+        elif (q := w.read_question(read, me)) and q[0] is not None:
+            reply = ("lookup", _lookup_answer(w, q[0], me, q[1]))
+        elif (rule := w.answer_rule(read, me)) is not None:
             reply = ("rule", rule)
         elif SMALL_TALK.match(text):
             reply = ("other", {"text": "I can answer questions about the timetable (“am I free on Friday?”) and "
                                        "about the rules (“how many online classes are allowed?”), and make "
                                        "requests (“move my Monday lecture to Tuesday”)."})
-        else:
-            reply = ("confirm", {"text": text, "makeup": body.makeup, "reader": reader})
-        mine = w.store.add_chat(me, "you", "text", {"text": text})
-        return [mine, w.store.add_chat(me, "assistant", reply[0], reply[1])]
+        else:  # a request: sent as it was read ("move my DS lecture there" with "there" filled in)
+            reply = ("confirm", {"text": read, "makeup": body.makeup, "reader": q[1]})
+        return [w.store.add_chat(me, "you", "text", mine), w.store.add_chat(me, "assistant", reply[0], reply[1])]
 
     @app.post("/api/chat/confirm")
     def chat_confirm(body: ConfirmBody, u: dict = Depends(user)) -> list[dict]:
@@ -906,15 +919,20 @@ def create_web_app(world: World | None = None, *, worlds_dir: Path | None = None
                     "text": "I couldn't read that as a question about the timetable. Try asking it another way, "
                             "or send it as a request."})]
             return [w.store.add_chat(me, "assistant", "lookup", _lookup_answer(w, call, me, reader))]
+        return [_send_request(w, me, m)]
+
+    def _send_request(w: World, me: str, m: dict) -> dict:
+        """The request a "send this as a request?" message (``m``) asked about, sent; its card."""
         try:
             r = w.intake.from_portal(me, m["text"], makeup=m.get("makeup"))
         except UnknownSender:
             raise HTTPException(403, "unknown user") from None
         if r is None:
             raise HTTPException(409, "duplicate request")
-        card = w.store.add_chat(me, "assistant", "request", {"case": r.id})
+        # what was asked kept with the card: a follow-up ("has it been approved?") sees which request it was
+        card = w.store.add_chat(me, "assistant", "request", {"case": r.id, "request_text": m["text"]})
         w.submit(r)
-        return [card]
+        return card
 
     @app.delete("/api/chat")
     def chat_clear(u: dict = Depends(user)) -> dict:

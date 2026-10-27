@@ -203,3 +203,53 @@ def test_signing_in_is_required(client):
     c, _ = client
     assert c.get("/api/chat").status_code in (401, 422)
     assert c.post("/api/chat", json={"text": "hi"}, headers={"X-User": "nobody"}).status_code == 401
+
+
+# -- follow-ups (agents.memory): a stand-in for the model, which the offline world doesn't have ---------------
+
+
+def test_a_follow_up_is_read_as_it_was_made_to_stand(client, monkeypatch):
+    from agents.memory import Rewritten
+
+    c, world = client
+    me = faculty(world, "Dr. Iyer")
+    seen = []
+
+    def followup(text, sender, history):
+        seen.append([t.text for t in history])
+        return {"and Friday?": Rewritten("when am I free on Friday?", changed=True),
+                "is that room free?": Rewritten("is that room free?", ask="Which room do you mean?"),
+                "move my DS lecture there": Rewritten("move my DS lecture to Friday 9 am", changed=True)}.get(text)
+
+    monkeypatch.setattr(world, "followup", followup)
+    send(c, me, "when am I free on Monday?")
+    mine, reply = send(c, me, "and Friday?")
+    assert mine["text"] == "and Friday?" and mine["read_as"] == "when am I free on Friday?"
+    assert reply["kind"] == "lookup" and "Friday" in reply["answer"]
+    assert seen[-1][-2:][0] == "when am I free on Monday?"  # the chat before it, as turns
+    mine, reply = send(c, me, "is that room free?")
+    assert "read_as" not in mine and (reply["kind"], reply["text"]) == ("other", "Which room do you mean?")
+    _, ask = send(c, me, "move my DS lecture there")
+    assert ask["kind"] == "confirm" and ask["text"] == "move my DS lecture to Friday 9 am"  # sent as read
+    card = confirm(c, me, ask["n"], "request").json()[0]
+    assert card["request_text"] == "move my DS lecture to Friday 9 am"
+
+
+def test_memory_is_off_offline(client):
+    _, world = client
+    assert not world.memory_on and world.followup("and Friday?", "F-101", ["x"]) is None
+
+
+def test_yes_typed_to_send_as_request_sends_it(client, monkeypatch):
+    from agents.memory import Rewritten
+
+    c, world = client
+    me = faculty(world, "Dr. Pillai")
+    text = "please cancel my classes on Monday of week 15, I am at a conference"
+    _, ask = send(c, me, text)
+    assert ask["kind"] == "confirm"
+    monkeypatch.setattr(world, "followup", lambda t, s, h: Rewritten(text, changed=True) if t == "yes" else None)
+    before = len(world.store.requests())
+    mine, card = send(c, me, "yes")
+    assert mine["read_as"] == text and card["kind"] == "request" and len(world.store.requests()) == before + 1
+    assert world.store.chat_message(me, ask["n"])["answered"] == "request"

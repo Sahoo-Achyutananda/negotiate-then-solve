@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from agents.documents import load_corpus, ocr_backend
+from agents.memory import Memory, Rewritten
 from agents.negotiation import Message, Negotiator, Reply
 from agents.policy import RulePolicyAgent, embedder
 from agents.priority import PriorityModel
@@ -712,6 +713,36 @@ class World:
                      "; ".join(say(s) for s in others[:5]) + ("; …" if len(others) > 5 else "") if others else
                      "No other class would move")
         return ". ".join(parts) + ". Nothing has been changed: send it as a request to make it happen."
+
+    @property
+    def memory_on(self) -> bool:
+        """Whether follow-ups are made to stand on their own (agents.memory): with the local model, when the
+        adapters file names a ``memory`` adapter; with Gemini, always. ``NTS_MEMORY=off`` turns it off."""
+        if os.environ.get("NTS_MEMORY") == "off" or self.model_link is None:
+            return False
+        if self.parser_mode == "gemini":
+            return True
+        from language.adapters import registry
+
+        adapters = registry()
+        return self.parser_mode == "local" and adapters is not None and adapters.adapter_for("memory") is not None
+
+    def followup(self, text: str, sender: str, history: list) -> Rewritten | None:
+        """``text`` made to stand on its own from ``history`` (``agents.memory.Turn``s, the chat before it): a
+        rewrite, the same text, or a question back (``ask``). None when memory is off or the model can't be
+        reached: the message is read as written."""
+        if not history or not self.memory_on or not self.model_link.usable():
+            return None
+        try:
+            return Memory(self.instance, _task(self.model_link.client, "memory"), sender,
+                          self.current_week() or 1).rewrite(text, history)
+        except Exception as e:  # noqa: BLE001 - read as written instead
+            from .fallback import _outage
+
+            if _outage(e):
+                self.model_link.failed(e)
+            print(f"[model] memory: {type(e).__name__}: {str(e)[:160]}; read as written", flush=True)
+            return None
 
     def read_question(self, text: str, sender: str, gate: bool = True) -> tuple[ToolCall | None, str]:
         """What a chat message asks to look up, and who read it. In the order that scored best on the test set

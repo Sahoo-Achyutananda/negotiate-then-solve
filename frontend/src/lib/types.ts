@@ -755,7 +755,9 @@ export interface RowsSlice {
 
 /** One message of the person's chat (GET/POST /api/chat, POST /api/chat/confirm; CHAT-PLAN.md). */
 export type ChatMessage =
-  | (ChatBase & { role: "you"; kind: "text"; text: string })
+  /** what the person wrote; ``read_as``: a follow-up as it was read, made to stand on its own ("and Friday?" →
+   *  "when is Dr. Rao free on Friday?"), when it was rewritten */
+  | (ChatBase & { role: "you"; kind: "text"; text: string; read_as?: string })
   | (ChatBase & { role: "assistant"; kind: "lookup" } & Omit<AskAnswer, "kind">)
   /** a question about the rules, answered from them: every rule cited (none: "I couldn't find a rule"). */
   | (ChatBase & { role: "assistant"; kind: "rule"; answer: string; rules: { id: string; title: string }[] })

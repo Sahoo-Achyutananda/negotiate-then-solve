@@ -120,12 +120,13 @@ class TemplateFiller:
         self.semester_start = semester_start
         self.directory = Directory(instance)
 
-    def fill(self, row: dict, rng: random.Random) -> Filled | None:
-        """None when the department has nothing to fill a placeholder with (no shared first name, ...)."""
+    def fill(self, row: dict, rng: random.Random, asker: str | None = None) -> Filled | None:
+        """None when the department has nothing to fill a placeholder with (no shared first name, ...).
+        ``asker``: who asks (a conversation's person, nts-memory's data); by default one picked for the row."""
         self.rng, self.picked, self.said = rng, {}, {}
         rep = row.get("asker") == "rep"
         teaching = sorted({s.faculty for s in self.instance.sessions})
-        self.asker = f"ST-{rng.choice(self.instance.groups).id}" if rep else rng.choice(teaching)
+        self.asker = asker or (f"ST-{rng.choice(self.instance.groups).id}" if rep else rng.choice(teaching))
         try:
             question = PLACEHOLDER.sub(lambda m: self._say(m.group(1), m.group(2)), row["template"])
             week = self._week(row)

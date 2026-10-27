@@ -221,8 +221,9 @@ function Message(props: {
   const { m } = props;
   if (m.role === "you")
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-0.5">
         <p className="max-w-[85%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-brand/12 px-3 py-2 text-[13.5px]">{m.text}</p>
+        {m.read_as && <p className="max-w-[85%] text-[11px] text-ink-3">Read as: {m.read_as}</p>}
       </div>
     );
   if (m.kind === "lookup") return <LookupCard answer={m.answer ?? ""} view={m.view ?? null} inst={props.inst} cal={props.cal} onView={props.onView} />;
