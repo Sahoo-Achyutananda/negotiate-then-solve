@@ -925,12 +925,23 @@ def create_web_app(world: World | None = None, *, worlds_dir: Path | None = None
         """A timetable question's answer: the reply, the lookup, who read it, the part of the timetable to draw
         beside it (``view``, agents.views; None when there is nothing to draw), and for free hours the hours
         themselves (``free``, for the timetable to shade)."""
+        from agents.more_lookups import Records
+
         week = WeekTimetable(w.instance, w.store, call.week)
-        out = {"answer": Answerer(w.instance, sender).answer(call, week), "reader": reader,
-               "call": {"tool": call.tool, "args": call.args, "week": call.week, "confident": call.confident},
-               "view": view_of(w.instance, call, week, sender)}
-        if call.tool == "free_hours" and call.confident:
-            out["free"] = [{"day": d, "slot": s} for d, s in free_hours_of(w.instance, call, week)]
+        records = Records.from_world(w)  # requests, rules, bookings, other weeks: v3's lookups read them
+        answerer = Answerer(w.instance, sender, records, sees_all=sender == COORDINATOR)
+
+        def shown(c) -> dict:
+            args = ({"parts": [shown(p) for p in c.args["parts"]]} if c.tool == "multi" else c.args)
+            return {"tool": c.tool, "args": args, "week": c.week, "confident": c.confident}
+
+        # several lookups (v3): the timetable beside the answer is the first part's
+        first = call.args["parts"][0] if call.tool == "multi" else call
+        first_week = week if first.week == call.week else WeekTimetable(w.instance, w.store, first.week)
+        out = {"answer": answerer.answer(call, week), "reader": reader, "call": shown(call),
+               "view": view_of(w.instance, first, first_week, sender)}
+        if first.tool == "free_hours" and first.confident:
+            out["free"] = [{"day": d, "slot": s} for d, s in free_hours_of(w.instance, first, first_week)]
         return out
 
     @app.post("/api/requests")

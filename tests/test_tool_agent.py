@@ -76,8 +76,6 @@ def test_after_the_last_try_it_says_so_and_guesses_nothing(world):
 
 
 @pytest.mark.parametrize("choice, problem", [
-    (Choice(tool="free_hours", week=WEEK), "needs at least one teacher"),
-    (Choice(tool="free_rooms", week=WEEK), "needs kind"),
     (Choice(tool="free_rooms", kind="lab", equipment=["laser"], week=WEEK), "equipment ['laser']"),
     (Choice(tool="free_hours", teachers=["me"], hours=[4], week=WEEK), "not lunch"),
     (Choice(tool="classes_of", teachers=["Dr. Iyer", "Dr. Rao"], week=WEEK), "at most one teacher"),
@@ -87,6 +85,14 @@ def test_what_is_checked(world, choice, problem):
     a = agent(world, *[choice] * MAX_TRIES)
     a.read("question")
     assert problem in a.trace[0]["problem"]
+
+
+def test_nobody_named_is_the_asker_and_a_room_is_a_lecture_room(world):
+    """The checker's defaults (v2's misses T-020, T-137, T-042): the model leaving these out is not a mistake."""
+    call = agent(world, Choice(tool="free_hours", days=["Wed"], part="morning", week=WEEK)).read("any free time on wednesday morning?")
+    assert call.args["teachers"] == [person(world, "Dr. Menon")]
+    call = agent(world, Choice(tool="free_rooms", days=["Fri"], hours=[7], week=WEEK)).read("which rooms are free on Fri at 4 pm")
+    assert call.args["kind"] == "lecture"
 
 
 def test_something_not_in_the_department_is_not_guessed(world):

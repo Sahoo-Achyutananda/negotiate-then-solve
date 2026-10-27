@@ -297,13 +297,28 @@ class QuestionReader:
 class Answerer:
     """Runs a ToolCall on the week's timetable and writes the reply from what it returns."""
 
-    def __init__(self, instance: Instance, sender: str) -> None:
+    def __init__(self, instance: Instance, sender: str, records=None, sees_all: bool = False) -> None:
+        """``records``: the app's data the timetable doesn't hold (``more_lookups.Records``: requests, rules,
+        bookings, other weeks); the lookups that need it say so without it. ``sees_all``: the asker may see every
+        request (the timetable office)."""
         self.instance = instance
         self.sender = sender
+        self.records = records
+        self.sees_all = sees_all
 
     def answer(self, call: ToolCall, week: WeekTimetable) -> str:
         if not call.confident:
             return call.note
+        if call.tool == "multi":  # several lookups in one question (v3): each answered, in order
+            return " ".join(self.answer(p, self._week_of(p, week)) for p in call.args["parts"])
+        if len(call.args.get("weeks", [])) > 1:  # several weeks: each, and for free hours the hours free in all
+            return self._weeks(call, week)
+        from . import more_lookups
+
+        if call.tool in more_lookups.MORE_TOOLS:
+            return more_lookups.answer(self, call, week)
+        if call.tool == "free_hours" and call.args.get("room_for"):
+            return self._room_for(call, week)
         if call.tool == "free_hours":
             if call.args.get("kind") or call.args.get("min_capacity") or call.args.get("equipment"):
                 return self._free_with_room(call, week)
@@ -322,6 +337,74 @@ class Answerer:
             return self._changes(call, week)
         return "I can answer questions like: my free hours this week, when Dr. Iyer teaches Machine Learning, " \
                "or whether Lab 2 is free on Friday."
+
+    def _week_of(self, call: ToolCall, week: WeekTimetable) -> WeekTimetable:
+        """The timetable of ``call``'s week: ``week`` when it is that one, else read from the records' store."""
+        store = getattr(self.records, "store", None)
+        if call.week == week.week or store is None:
+            return week
+        return WeekTimetable(self.instance, store, call.week)
+
+    def _weeks(self, call: ToolCall, week: WeekTimetable) -> str:
+        """ "Am I free every Tuesday this month?": the lookup in each week asked, and, for free hours, the hours free
+        in every one of them."""
+        weeks = sorted(call.args["weeks"])
+        one = {k: v for k, v in call.args.items() if k != "weeks"}
+        parts, common = [], None
+        for w in weeks:
+            c = ToolCall(call.tool, one, w)
+            wk = self._week_of(c, week)
+            parts.append(f"Week {w}: {self.answer(c, wk)}")
+            if call.tool == "free_hours" and not one.get("slots"):
+                hours = set(self._in_part(wk.free_hours(one.get("teachers", ()), one.get("sections", ()),
+                                                        one.get("rooms", ()), one.get("days"),
+                                                        length=one.get("length", 1)), one))
+                common = hours if common is None else common & hours
+        if common is not None:
+            days = self.instance.calendar.days
+            every = sorted(common, key=lambda h: (days.index(h[0]), h[1]))
+            parts.insert(0, (f"Free in every one of weeks {weeks[0]}–{weeks[-1]}: {_spans(every)}." if every else
+                             f"There is no hour free in every one of weeks {weeks[0]}–{weeks[-1]}."))
+        return " ".join(parts)
+
+    def _room_for(self, call: ToolCall, week: WeekTimetable) -> str:
+        """ "Can Lab 3 hold Sections 1 and 2?": the free hours as asked, then whether each room named seats the
+        sections together, and, when one doesn't, rooms that do and are free then."""
+        a, i = call.args, self.instance
+        need = sum(i.group_by_id[g].size for g in a["room_for"])
+        plain = {k: v for k, v in a.items() if k != "room_for"}
+        groups = _listed([i.group_by_id[g].name for g in a["room_for"]])
+        if not a.get("rooms"):  # no room named: the hours when they're free with any room big enough
+            plain["min_capacity"] = max(need, plain.get("min_capacity") or 0)
+            return self._free_with_room(ToolCall("free_hours", plain, call.week), week)
+        said = self._free(ToolCall("free_hours", plain, call.week), week)
+        small = [r for r in (i.room_by_id[x] for x in a["rooms"]) if r.capacity < need]
+        if not small:
+            fits = _listed([f"{r.name} ({r.capacity} seats)" for r in (i.room_by_id[x] for x in a["rooms"])])
+            return f"{said} {fits} can seat {groups} together ({need} students)."
+        names = _listed([f"{r.name} has {r.capacity} seats" for r in small])
+        free = set(week.free_hours(a.get("teachers", ()), a.get("sections", ()), (), a.get("days")))
+        others = []
+        for room in i.rooms:
+            if room.capacity >= need and room.id not in a["rooms"]:
+                hours = [h for h in week.free_hours(rooms=[room.id], days=a.get("days")) if h in free]
+                if hours := self._in_part(hours, a):
+                    others.append(f"{room.name} ({room.capacity} seats), free {_spans(hours[:6])}")
+        alt = (f" Rooms that can: {'; '.join(others[:3])}." if others else
+               f" No room seats {need} at those hours.")
+        return f"{said} But {names}, and {groups} have {need} students together, so it can't hold them at once.{alt}"
+
+    def _name(self, who: tuple[str, str]) -> str:
+        """One teacher, section or room by name ("you" for the asker): ("teacher", "F-103") -> "Dr. Iyer"."""
+        kind, i = who
+        if kind == "teacher":
+            return "you" if i == self.sender else self.instance.faculty_by_id[i].name
+        if kind == "section":
+            return "your section" if self.sender == f"ST-{i}" else self.instance.group_by_id[i].name
+        return self.instance.room_by_id[i].name
+
+    def _spans(self, hours: list[tuple[str, int]]) -> str:
+        return _spans(hours)
 
     def _free(self, call: ToolCall, week: WeekTimetable) -> str:
         a = call.args

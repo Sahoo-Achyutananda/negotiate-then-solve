@@ -297,11 +297,16 @@ class Directory:
 
 
 TITLES = {"dr", "prof", "professor", "mr", "ms", "mrs", "sir", "maam", "madam"}  # "Khan sir", "Iyer ma'am"
+# short and other forms people write for the words in names: "rm 104", "classroom 101", "sec 2" (a prefix like
+# "sec" already matches "section"; these are the ones that don't start the same)
+ALIASES: dict[str, str] = {"rm": "room", "classroom": "room", "laboratory": "lab", "grp": "section", "group": "section",
+                           "batch": "section"}  # not "lecture" ("DS lecture" is a course) nor "hall" (not a room)
 
 
 def _words(text: str) -> list[str]:
-    """Lower-case words without titles: "Dr. Iyer" -> ["iyer"], "Lab 2" -> ["lab", "2"]."""
-    return [w for w in re.findall(r"[a-z0-9]+", text.lower().replace("'", "")) if w not in TITLES]
+    """Lower-case words without titles, short forms written out: "Dr. Iyer" -> ["iyer"], "Lab 2" -> ["lab", "2"],
+    "rm 104" -> ["room", "104"]."""
+    return [ALIASES.get(w, w) for w in re.findall(r"[a-z0-9]+", text.lower().replace("'", "")) if w not in TITLES]
 
 
 def _matches(words: list[str], name: str) -> bool:

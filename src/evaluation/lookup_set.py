@@ -104,6 +104,7 @@ class Filled:
     args: dict = field(default_factory=dict)
     week: int = WEEK
     also: list[dict] = field(default_factory=list)  # other answers that count as right (ambiguous wordings)
+    split: list[dict] = field(default_factory=list)  # "each one on its own": the lookup for each, in any order
 
 
 class TemplateFiller:
@@ -121,12 +122,12 @@ class TemplateFiller:
 
     def fill(self, row: dict, rng: random.Random) -> Filled | None:
         """None when the department has nothing to fill a placeholder with (no shared first name, ...)."""
-        self.rng, self.picked = rng, {}
+        self.rng, self.picked, self.said = rng, {}, {}
         rep = row.get("asker") == "rep"
         teaching = sorted({s.faculty for s in self.instance.sessions})
         self.asker = f"ST-{rng.choice(self.instance.groups).id}" if rep else rng.choice(teaching)
         try:
-            question = PLACEHOLDER.sub(lambda m: self._text(m.group(1), m.group(2)), row["template"])
+            question = PLACEHOLDER.sub(lambda m: self._say(m.group(1), m.group(2)), row["template"])
             week = self._week(row)
             args = {k: self._label(k, v) for k, v in row.get("args", {}).items()}
         except LookupError:
@@ -137,8 +138,9 @@ class TemplateFiller:
         self._resolve(row["tool"], args)
         also = [{"tool": a["tool"], "args": {k: self._label(k, v) for k, v in a.get("args", {}).items()}}
                 for a in row.get("also", [])]
+        args = {k: v for k, v in args.items() if v not in (None, [], False)}
         return Filled(row["id"], row.get("group", row["tool"] or "none"), question, self.asker, row["tool"],
-                      {k: v for k, v in args.items() if v not in (None, [], False)}, week, also)
+                      args, week, also, apart(row["tool"], args, row["split"]) if row.get("split") else [])
 
     def _resolve(self, tool: str | None, args: dict) -> None:
         """The words the model writes for the code to resolve (v2), turned into the IDs the lookup ends with, as
@@ -255,6 +257,16 @@ class TemplateFiller:
 
     # -- the question's words ---------------------------------------------------------------------------------
 
+    def _say(self, name: str, form: str | None) -> str:
+        """``_text``, remembering how a teacher, section, room or course was written ("khan sir", "sec 2", "ML"), for a
+        reader that copies names as written (nts-lookup-v3)."""
+        text = self._text(name, form)
+        if form == "n":  # "Sections 1, 2 and 3": the model writes each in full ("Section 2"), not "2"
+            self.said.setdefault(name, self._pick(name).name)
+        elif form != "course":  # "{teacher.course}" writes the teacher's course, not the teacher
+            self.said.setdefault(name, text)
+        return text
+
     def _text(self, name: str, form: str | None) -> str:
         if name.startswith("teacher") and form == "course":
             return self._course_text(self._course_of(self._pick(name)), None)
@@ -366,8 +378,34 @@ def fill_all(instance: Instance, rows: list[dict], fills: int = 3, seed: int = 0
     return out
 
 
-def right(f: Filled, call: ToolCall | None) -> bool:
-    """Whether a reading is the expected one: the tool, the week and the arguments (lists in any order)."""
+ONE = {"teachers": "teacher", "sections": "section", "rooms": "room"}
+
+
+def apart(tool: str | None, args: dict, keys: list[str]) -> list[dict]:
+    """A label for "each one on its own" ("when is Section 1, Section 2 and Section 3 free?", "what do Sections 1
+    and 2 have on Monday?"): the arguments of the lookup for each teacher, section or room in ``keys``, the rest as
+    given. Tools of one teacher, section or room (classes_of, changes, describe) name it in the singular."""
+    single = tool in ("classes_of", "changes", "describe")
+    rest = {k: v for k, v in args.items() if k not in keys}
+    return [rest | ({ONE[k]: x} if single else {k: [x]}) for k in keys for x in args.get(k, [])]
+
+
+def right(f: Filled, call: ToolCall | None, partial: bool = False) -> bool:
+    """Whether a reading is the expected one: the tool, the week and the arguments (lists in any order).
+    ``partial``: the label gives only some arguments (v3's tool templates: "move_options" names the course, not the
+    class's ID), and those must match. A label split into one lookup each (``Filled.split``): every one of them,
+    in any order, and nothing else."""
+    if f.split:
+        got = call.args["parts"] if call is not None and call.tool == "multi" else [call]
+        if any(g is None or not g.confident or g.tool != f.tool or g.week != f.week for g in got):
+            return False
+        return sorted(json.dumps(_norm(g.args), sort_keys=True) for g in got) == \
+            sorted(json.dumps(_norm(x), sort_keys=True) for x in f.split)
+    if partial and f.tool not in (None, "unclear"):
+        if call is None or not call.confident or call.tool != f.tool or call.week != f.week:
+            return False
+        got = _norm(call.args)
+        return all(got.get(k) == v for k, v in _norm(f.args).items())
     if f.tool is None:
         return call is None
     if call is None:
@@ -439,6 +477,10 @@ def main() -> None:
                     help="with --department: courses shared by every section, some with two teachers (run D)")
     ap.add_argument("--templates", type=Path, default=TEMPLATES,
                     help=f"the test templates (default {TEMPLATES.name}; v2's new kinds: {TEMPLATES_V2.name})")
+    ap.add_argument("--names-listed", action="store_true",
+                    help="with --multi: the department's names in the prompt (v3 as first built), not names as written")
+    ap.add_argument("--multi", action="store_true",
+                    help="read with v3's prompt and answer (several lookups, more tools): for nts-lookup-v3")
     ap.add_argument("--resume", action="store_true",
                     help="keep the questions already in --out and ask only the rest (after a dropped connection)")
     a = ap.parse_args()
@@ -451,6 +493,7 @@ def main() -> None:
     instance = with_first_names(department(w.instance, a.department, a.shuffle, a.shared))
     print("department:", instance.name)
     rows = [json.loads(x) for x in a.templates.read_text(encoding="utf-8").splitlines() if x.strip()]
+    partial = {r["id"] for r in rows if r.get("choice") and r["tool"] not in (None, "unclear")}  # v3's tool templates
     questions = fill_all(instance, rows, a.fills, a.seed)
     client, model = None, None
     from agents.tool_agent import ToolAgent
@@ -486,7 +529,8 @@ def main() -> None:
                                             semester_start=SEMESTER_START).read(f.question)}
             trace = []
             if client:
-                agent = ToolAgent(instance, client, f.asker, WEEK, today=NOW.date(), now=NOW,
+                agent = ToolAgent(instance, client, f.asker, WEEK, today=NOW.date(), now=NOW, multi=a.multi,
+                                  names_listed=a.names_listed if a.multi else None,
                                   semester_start=SEMESTER_START)
                 try:
                     got[model] = _with_retries(agent.read, f.question)
@@ -496,7 +540,7 @@ def main() -> None:
                 trace = agent.trace
                 got["both"] = got["regex"] if got["regex"] is not None or REQUEST.search(f.question) else got[model]
             for r in readers:
-                ok = right(f, got[r])
+                ok = right(f, got[r], f.id in partial)
                 score[r].setdefault(f.group, []).append(ok)
                 if a.misses and not ok and r != "both":
                     print(f"miss {r:6} {f.id} {f.question!r}\n       want {f.tool} {f.args} w{f.week}"
@@ -504,7 +548,7 @@ def main() -> None:
             out.write(json.dumps({"id": f.id, "group": f.group, "question": f.question, "asker": f.asker,
                                   "want": {"tool": f.tool, "args": f.args, "week": f.week},
                                   **{r: _show(got[r]) for r in readers}, "tries": trace,
-                                  **{f"{r}_right": right(f, got[r]) for r in readers}}) + "\n")
+                                  **{f"{r}_right": right(f, got[r], f.id in partial) for r in readers}}) + "\n")
             out.flush()  # each question kept at once, so a run cut short can be resumed
 
     groups = sorted({g for s in score.values() for g in s})

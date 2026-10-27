@@ -90,12 +90,12 @@
 {"id": "L-090", "group": "describe", "template": "what are the class timings, start to end?", "tool": "describe", "args": {"what": "calendar"}}
 {"id": "L-091", "group": "describe", "template": "how many weeks does the semester have", "tool": "describe", "args": {"what": "calendar"}}
 {"id": "L-092", "group": "changes", "template": "any changes to the timetable {when}?", "tool": "changes", "args": {}}
-{"id": "L-093", "group": "changes", "template": "is any class cancelled {when}", "tool": "changes", "args": {}}
+{"id": "L-093", "group": "changes", "template": "is any class cancelled {when}", "tool": "changes", "args": {"change": "cancelled"}}
 {"id": "L-094", "group": "changes", "template": "has my timetable changed {when}?", "tool": "changes", "args": {"teacher": "me"}}
-{"id": "L-095", "group": "changes", "template": "did any of {teacher.any}'s classes get moved {when}?", "tool": "changes", "args": {"teacher": "{teacher}"}}
+{"id": "L-095", "group": "changes", "template": "did any of {teacher.any}'s classes get moved {when}?", "tool": "changes", "args": {"teacher": "{teacher}", "change": "moved"}}
 {"id": "L-096", "group": "changes", "template": "changes for {section.any} {when}", "tool": "changes", "args": {"section": "{section}"}}
 {"id": "L-097", "group": "changes", "template": "is our timetable different {when}?", "asker": "rep", "tool": "changes", "args": {"section": "me"}}
-{"id": "L-098", "group": "changes", "template": "any extra classes {when}?", "tool": "changes", "args": {}}
+{"id": "L-098", "group": "changes", "template": "any extra classes {when}?", "tool": "changes", "args": {"change": "extra"}}
 {"id": "L-099", "group": "dates", "template": "am I free on {date.any}?", "week": "{date}", "tool": "free_hours", "args": {"teachers": ["me"], "days": ["{date}"]}}
 {"id": "L-100", "group": "dates", "template": "can I use {room.any} at {time.any} on {date.any}, is it empty?", "week": "{date}", "tool": "free_hours", "args": {"rooms": ["{room}"], "days": ["{date}"], "slots": ["{time}"]}}
 {"id": "L-101", "group": "dates", "template": "{lab.any} availability on {date.any}", "week": "{date}", "tool": "free_hours", "args": {"rooms": ["{lab}"], "days": ["{date}"]}}

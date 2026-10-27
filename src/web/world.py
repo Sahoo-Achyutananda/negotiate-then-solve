@@ -664,6 +664,55 @@ class World:
             return {"answer": "I couldn't find a rule about that. You can ask the timetable office.", "rules": []}
         return {"answer": decision.answer or decision.explanation, "rules": cited}
 
+    def what_if(self, text: str, sender: str, week: int) -> str:
+        """A dry run of a change (the lookup ``what_if``): the change read as a request would be (the same parser),
+        the rule checks, and the week solved from its timetable with the change added, so the reply says what would
+        move. Nothing is stored, sent, negotiated or published."""
+        from agents.explainer import placement_text, session_name
+        from core.graph import moved_sessions
+        from core.schemas import Channel, Request, Role
+        from core.solver import TimetableSolver
+        from pipeline.orchestrator import _regular
+
+        role = next((i.role for i in self.directory.by_email.values() if i.person == sender), Role.FACULTY)
+        r = Request(id="WHAT-IF", channel=Channel.PORTAL, sender_id=sender, role=role, raw_text=text,
+                    received_at=datetime.now(UTC), makeup=True)
+        base = self.store.current_version(week) or self.store.current_version()
+        baseline = _regular(base.assignment) if base else {}
+        try:
+            compiled = getattr(self.parser, "compile", lambda *a, **k: None)(r, baseline, week)
+            parsed = compiled.result if compiled is not None else self.parser.parse(r)
+        except Exception:  # noqa: BLE001 - a dry run never fails the chat
+            return "I couldn't read that change. Say which class and where it should go, e.g. \"move my DS lecture to Thursday 10 am\"."
+        out = parsed.output
+        if out is not None and getattr(out, "clarifying_question", None) and not parsed.constraints:
+            return f"To try that out I need to know more: {out.clarifying_question}"
+        if not parsed.constraints:
+            return "That doesn't read as a change to the timetable, so there is nothing to try out."
+        policy = getattr(self, "rule_policy", None)
+        if policy is not None:
+            verdict = policy.review(text, parsed)
+            if verdict.verdict.value == "forbidden":
+                return f"That change would be refused: {verdict.explanation}"
+        cancelled, _ = self.orch._cancelled(week)
+        res = TimetableSolver(self.instance, [*self.store.constraints(), *parsed.constraints], week=week,
+                              baseline=baseline, time_limit=20, skip=cancelled).solve()
+        if not res.ok:
+            return (f"That can't be fitted into week {week} without breaking someone's firm rules. Sent as a request, "
+                    "it would go to negotiation with the people affected.")
+        moved = [s for s in moved_sessions(baseline, res.assignment) if s in baseline and s in res.assignment]
+        if not moved:
+            return f"Nothing would have to move in week {week}: the timetable already fits that."
+        own = [s for s in moved if self.instance.session_by_id[s].faculty == sender]
+        others = [s for s in moved if s not in own]
+        say = lambda s: (f"{session_name(self.instance, s)}: {placement_text(self.instance, baseline[s])} → "  # noqa: E731
+                         f"{placement_text(self.instance, res.assignment[s])}")
+        parts = [f"If you sent it now (week {week}): " + ("; ".join(say(s) for s in own) or "your classes stay")]
+        parts.append(f"{len(others)} other class{'es' if len(others) != 1 else ''} would move: " +
+                     "; ".join(say(s) for s in others[:5]) + ("; …" if len(others) > 5 else "") if others else
+                     "No other class would move")
+        return ". ".join(parts) + ". Nothing has been changed: send it as a request to make it happen."
+
     def read_question(self, text: str, sender: str, gate: bool = True) -> tuple[ToolCall | None, str]:
         """What a chat message asks to look up, and who read it. In the order that scored best on the test set
         (PROGRESS.md: 332/362): a message with request words ("can I have", "please move", "cancel") is a request,
@@ -679,7 +728,9 @@ class World:
             try:
                 agent = ToolAgent(self.instance, _task(self.model_link.client, "lookup"), sender, week,
                                   semester_start=start,  # roles as the app has them now ("the HOD")
-                                  roles_of={i.person: i.role.value for i in self.directory.by_email.values()})
+                                  roles_of={i.person: i.role.value for i in self.directory.by_email.values()},
+                                  # a v3 adapter reads several lookups and the new tools (agents.more_lookups)
+                                  multi="v3" in (self.lookup_adapter or ""))
                 call = agent.read(text)
                 if call is None or call.confident or call.note != COULD_NOT:
                     return call, "model"
