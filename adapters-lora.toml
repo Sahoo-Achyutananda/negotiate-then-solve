@@ -12,6 +12,9 @@ nts-read100 = ["policy", "reply", "explain"]
 nts-lookup-v2 = ["lookup"]       # timetable questions: which lookup to do (notebooks/train_lookup_kaggle.ipynb);
                                  # v2 beats v1 on every test run (343-347 vs 326-329 of 362; new kinds 80-83 vs
                                  # 66-68 of 86, PROGRESS.md). Back to v1: put nts-lookup-v1 here instead (one per task)
+nts-memory-v1 = ["memory"]       # a follow-up made to stand on its own from the chat's last 4 messages, before it
+                                 # is read (agents.memory; notebooks/train_memory_kaggle.ipynb). Not on the server
+                                 # yet: messages are read as typed (the chat works as before). Off: NTS_MEMORY=off
 
 [schemas]                       # the intent vocabulary an adapter was trained on, when not the current one
 nts-intents-v4 = 3              # IDs and the directory in the prompt (language.intent_compiler.INTENT_PROMPT_V3)
