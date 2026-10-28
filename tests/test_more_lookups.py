@@ -226,3 +226,41 @@ def test_a_tool_of_one_asked_about_several_answers_each(world, week):
         ("describe", {"room": "L-1"}), ("describe", {"room": "R-104"})]
     said = answer(world, call, week)
     assert said.index("Section 1's classes") < said.index("Section 2's classes")
+
+
+# -- the checker honours what the model read (fixes after testing v3) ----------------------------------------
+
+
+def test_a_name_marked_unknown_that_is_on_the_staff_is_known(world):
+    """v3 sees no list of names: a bare "Priya" may be a student to it; the department says she is Dr. Priya Menon."""
+    from evaluation.lookup_set import with_first_names
+
+    inst = with_first_names(world.instance)
+    model = FakeModel(Lookups(lookups=[ChoiceV3(tool="classes_of", teachers=["Priya"], unknown=["Priya"], days=["Wed"],
+                                                week=WEEK)]),
+                      Lookups(lookups=[ChoiceV3(tool="free_hours", unknown=["Rohit Sharma"], week=WEEK)]),
+                      Lookups(lookups=[ChoiceV3(tool="free_rooms", unknown=["exam hall"], week=WEEK)]))
+    a = ToolAgent(inst, model, inst.faculty[0].id, WEEK, today=date(2026, 10, 21), multi=True)
+    priya = next(f.id for f in inst.faculty if f.name == "Dr. Priya Menon")
+    assert a.read("does Priya have anything on wednesday?").args == {"teacher": priya, "days": ["Wed"]}
+    rohit = next(f.id for f in inst.faculty if f.name == "Dr. Rohit Sharma")
+    assert a.read("Rohit Sharma free?").args["teachers"] == [rohit]  # only in unknown: put in its list
+    call = a.read("is the exam hall free?")
+    assert not call.confident  # not the department's: still unknown
+
+
+def test_dates_in_two_weeks_are_one_lookup_a_week(world, week):
+    """ "This Friday and next Monday": a lookup is about one week, so the dates of each week are their own."""
+    from evaluation.lookup_set import SEMESTER_START
+
+    model = FakeModel(Lookups(lookups=[ChoiceV3(tool="free_hours", sections=["Section 1", "Section 2"],
+                                                dates=["2026-10-23", "2026-10-26"], week=WEEK)]))
+    a = ToolAgent(world.instance, model, person(world, "Dr. Menon"), WEEK, today=date(2026, 10, 21),
+                  semester_start=SEMESTER_START, multi=True)
+    call = a.read("are sections 1 and 2 free this friday and next monday?")
+    assert call.tool == "multi" and [(p.week, p.args["days"]) for p in call.args["parts"]] == [(13, ["Fri"]), (14, ["Mon"])]
+
+
+def test_weeks_the_semester_does_not_have_are_said(world):
+    call, _ = read(world, ChoiceV3(tool="free_hours", teachers=["me"], weeks=[15, 16, 17], week=WEEK))
+    assert not call.confident and "week 17 isn't in it" in call.note

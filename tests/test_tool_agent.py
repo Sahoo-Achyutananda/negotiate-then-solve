@@ -79,12 +79,20 @@ def test_after_the_last_try_it_says_so_and_guesses_nothing(world):
     (Choice(tool="free_rooms", kind="lab", equipment=["laser"], week=WEEK), "equipment ['laser']"),
     (Choice(tool="free_hours", teachers=["me"], hours=[4], week=WEEK), "not lunch"),
     (Choice(tool="classes_of", teachers=["Dr. Iyer", "Dr. Rao"], week=WEEK), "at most one teacher"),
-    (Choice(tool="free_hours", teachers=["me"], week=40), "week 40 does not exist"),
 ])
 def test_what_is_checked(world, choice, problem):
     a = agent(world, *[choice] * MAX_TRIES)
     a.read("question")
     assert problem in a.trace[0]["problem"]
+
+
+def test_a_week_the_semester_does_not_have_is_said_not_retried(world):
+    """ "Free slots in week 18?": the model read it right; sending it back ended in the regex answering this week."""
+    a = agent(world, Choice(tool="free_hours", teachers=["me"], week=18))
+    call = a.read("my free slots in week 18?")
+    weeks = world.instance.calendar.weeks
+    assert not call.confident and call.note == f"The semester has {weeks} weeks (1–{weeks}); week 18 isn't in it."
+    assert len(a.client.prompts) == 1
 
 
 def test_nobody_named_is_the_asker_and_a_room_is_a_lecture_room(world):
