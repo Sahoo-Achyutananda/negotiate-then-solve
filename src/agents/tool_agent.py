@@ -450,8 +450,11 @@ class ToolAgent:
                 return ToolCall("unclear", week=self.current_week, confident=False, note=bad)
             c.week = found[0][0]
             c.days = list(dict.fromkeys(d for w, d in found if w == c.week))
-        if not 1 <= c.week <= cal.weeks:
-            raise Problem(f"week {c.week} does not exist; weeks are 1 to {cal.weeks}")
+        if not 1 <= c.week <= cal.weeks:  # a week the semester doesn't have ("week 18"): said, not sent back (the
+            # model read what was asked; retrying ended in the regex reader quietly answering this week instead)
+            return ToolCall("unclear", week=self.current_week, confident=False, note=self._no_week(c.week))
+        if c.unknown and not self.names_listed:  # v3 sees no list of names: whether "Priya" is a student or Dr. Priya
+            c = self._known(c)  # Menon is the department's to say, not a guess of the model's
         if c.unknown:
             return ToolCall("unclear", week=c.week, confident=False, note=self._unknown(c.unknown))
         asked = set(re.findall(r"[a-z]+", self.question.lower()))
@@ -572,10 +575,12 @@ class ToolAgent:
 
     # -- v3 ----------------------------------------------------------------------------------------------------
 
-    @staticmethod
-    def _split(c: Choice) -> list[Choice]:
+    def _split(self, c: Choice) -> list[Choice]:
         """ "What do Sections 1 and 2 have on Monday?": a tool of one teacher, section or room, asked about several,
-        is one lookup for each (the model writes them in one, so they don't count against the five)."""
+        is one lookup for each (the model writes them in one, so they don't count against the five). Dates in
+        different weeks ("this Friday and next Monday") are one lookup a week: a lookup is about one week."""
+        if len(by_week := self._dates_by_week(c)) > 1:
+            return [p for dates in by_week for p in self._split(c.model_copy(update={"dates": dates}))]
         if c.tool not in ("classes_of", "changes", "describe"):
             return [c]
         many = {k: v for k in ("teachers", "sections", "rooms", "roles") if len(v := getattr(c, k)) > 1 and not _all(v)}
@@ -603,10 +608,45 @@ class ToolAgent:
         return out
 
     def _weeks(self, weeks: list[int]) -> list[int]:
-        """Several weeks asked about: each must exist."""
+        """Several weeks asked about: each must exist (one that doesn't is said, as a single week is)."""
         if bad := [w for w in weeks if not 1 <= w <= self.instance.calendar.weeks]:
-            raise Problem(f"weeks {bad} do not exist; weeks are 1 to {self.instance.calendar.weeks}")
+            raise _Ask(self._no_week(bad[0]))
         return sorted(set(weeks))
+
+    def _no_week(self, week: int) -> str:
+        n = self.instance.calendar.weeks
+        return f"The semester has {n} weeks (1–{n}); week {week} isn't in it."
+
+    def _known(self, c: Choice) -> Choice:
+        """``c`` without the names in ``unknown`` that are the department's: exactly one teacher, section or room
+        (then in its list, if the model left it only in ``unknown``). The rest stay unknown ("the exam hall", a
+        student's name)."""
+        lists = {Faculty: "teachers", Group: "sections", Room: "rooms"}
+        still, update = [], {}
+        for name in c.unknown:
+            found = [x for x in self.directory.find(name) if type(x) in lists]
+            if len(found) != 1:
+                still.append(name)
+                continue
+            field = lists[type(found[0])]
+            named = update.setdefault(field, list(getattr(c, field)))
+            if not any(n.strip().lower() == name.strip().lower() for n in named):
+                named.append(name)
+        return c.model_copy(update={**update, "unknown": still})
+
+    def _dates_by_week(self, c: Choice) -> list[list[str]]:
+        """``c``'s dates grouped by the teaching week they fall in ("this Friday and next Monday": two weeks), in
+        the order asked; one group when they can't be placed (the check then says why)."""
+        if not c.dates or self.semester_start is None:
+            return [c.dates] if c.dates else []
+        groups: dict = {}
+        for d in c.dates:
+            try:
+                found = week_and_day(self.instance, self.semester_start, date.fromisoformat(d))
+            except ValueError:
+                return [c.dates]
+            groups.setdefault(found if isinstance(found, str) else found[0], []).append(d)
+        return list(groups.values())
 
     def _room_for(self, names: list[str]) -> list[str]:
         """ "A room for Sections 1 and 2": the sections (IDs) a room must seat together."""
