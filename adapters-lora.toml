@@ -9,9 +9,11 @@ base = "Qwen3.5-4B-Base-Q8_0"
 [adapters]
 nts-intents-v6-read100 = ["compile"]
 nts-read100 = ["policy", "reply", "explain"]
-nts-lookup-v2 = ["lookup"]       # timetable questions: which lookup to do (notebooks/train_lookup_kaggle.ipynb);
-                                 # v2 beats v1 on every test run (343-347 vs 326-329 of 362; new kinds 80-83 vs
-                                 # 66-68 of 86, PROGRESS.md). Back to v1: put nts-lookup-v1 here instead (one per task)
+nts-lookup-v3 = ["lookup"]       # timetable questions: which lookups to do, 1 to 5 a message, every tool
+                                 # (notebooks/train_lookup_v3_kaggle.ipynb, session 1). Against v2 (PROGRESS.md):
+                                 # old 362: 330 vs 336; v2's new kinds: 79 vs 80; v3's new tools: 51/52 (v2: none).
+                                 # Session 2 (nts-lookup-v3_1): 329, 78, 51, no better. Back to v2: nts-lookup-v2
+                                 # here (one per task; v2 reads one lookup, ToolAgent's multi=False for it)
 nts-memory-v1 = ["memory"]       # a follow-up made to stand on its own from the chat's last 4 messages, before it
                                  # is read (agents.memory; notebooks/train_memory_kaggle.ipynb). Not on the server
                                  # yet: messages are read as typed (the chat works as before). Off: NTS_MEMORY=off
